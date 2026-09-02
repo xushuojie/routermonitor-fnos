@@ -1,0 +1,26 @@
+name: router-monitor
+
+services:
+  nas-status:
+    build: .
+    container_name: nas-status
+    restart: unless-stopped
+    environment:
+      PROC_ROOT: /host
+      SYS_ROOT: /host
+      DEBUGFS_ROOT: /host/debug
+      NAS_STATUS_IFACE: ${NAS_STATUS_IFACE:-auto}
+      NAS_STATUS_TOKEN: ${NAS_STATUS_TOKEN:?Set NAS_STATUS_TOKEN in .env}
+    ports:
+      - "${NAS_STATUS_PORT:-18199}:18199"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /sys/kernel/debug:/host/debug:ro
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=1m
