@@ -9,7 +9,11 @@ services:
       PROC_ROOT: /host
       SYS_ROOT: /host
       DEBUGFS_ROOT: /host/debug
-      NAS_STATUS_IFACE: ${NAS_STATUS_IFACE:-auto}
+      SMART_ROOT: /host/smartmontools
+      NAS_STATUS_IFACE: ${NAS_STATUS_IFACE:-physical}
+      NAS_STATUS_STORAGE_PATHS: ${NAS_STATUS_STORAGE_PATHS:-/vol1,/vol2}
+      NAS_STATUS_HISTORY_DB: /data/traffic.sqlite3
+      NAS_STATUS_SMART_MAX_AGE_SECONDS: ${NAS_STATUS_SMART_MAX_AGE_SECONDS:-7200}
       NAS_STATUS_TOKEN: ${NAS_STATUS_TOKEN:?Set NAS_STATUS_TOKEN in .env}
     ports:
       - "${NAS_STATUS_PORT:-18199}:18199"
@@ -17,6 +21,10 @@ services:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /sys/kernel/debug:/host/debug:ro
+      - /var/lib/smartmontools:/host/smartmontools:ro
+      - /vol1:/vol1:ro
+      - /vol2:/vol2:ro
+      - traffic-history:/data
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -24,3 +32,6 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=1m
+
+volumes:
+  traffic-history:

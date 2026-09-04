@@ -1,18 +1,16 @@
 #include <lvgl.h>
 #include <TFT_eSPI.h>
-#include <string>
 #include <ESP8266WiFi.h>
 #include <time.h>
 
 #include "ConfigPortal.h"
 #include "NasStatus.h"
-
-using namespace std;
+#include "TrafficFormat.h"
 
 // extern lv_font_t my_font_name;
-LV_FONT_DECLARE(lv_font_montserrat_16)
+LV_FONT_DECLARE(lv_font_montserrat_12)
 LV_FONT_DECLARE(lv_font_montserrat_22)
-LV_FONT_DECLARE(lv_font_montserrat_46)
+LV_FONT_DECLARE(lv_font_montserrat_42)
 
 TFT_eSPI tft = TFT_eSPI(); /* TFT instance */
 static lv_disp_buf_t disp_buf;
@@ -22,9 +20,6 @@ static lv_color_t buf[LV_HOR_RES_MAX * 5];
 static lv_obj_t *login_page = NULL;
 static lv_obj_t *monitor_page = NULL;
 
-// basic variables
-static uint8_t test_data = 0;
-// static lv_obj_t* label1;
 static lv_obj_t *upload_label;
 static lv_obj_t *download_label;
 static lv_obj_t *up_speed_label;
@@ -33,37 +28,40 @@ static lv_obj_t *down_speed_label;
 static lv_obj_t *down_speed_unit_label;
 static lv_obj_t *cpu_bar;
 static lv_obj_t *cpu_value_label;
-static lv_obj_t *cpu_percent_label;
 static lv_obj_t *gpu_bar;
 static lv_obj_t *gpu_value_label;
-static lv_obj_t *gpu_percent_label;
 static lv_obj_t *mem_bar;
 static lv_obj_t *mem_value_label;
-static lv_obj_t *mem_percent_label;
-static lv_obj_t *uptime_value_label;
-static lv_obj_t *uptime_unit_label;
-static lv_obj_t *temp_value_label;
-static lv_obj_t *temp_unit_label;
 static lv_obj_t *time_label;
+static lv_obj_t *weekday_label;
+static lv_obj_t *date_label;
 static lv_obj_t *chart;
+static lv_obj_t *disk_read_label;
+static lv_obj_t *disk_read_value;
+static lv_obj_t *disk_read_unit;
+static lv_obj_t *disk_write_label;
+static lv_obj_t *disk_write_value;
+static lv_obj_t *disk_write_unit;
+static lv_obj_t *carousel_title[3];
+static lv_obj_t *carousel_value[3];
+static uint8_t carouselPage = 0;
+static bool nasOnline = false;
 
 static lv_chart_series_t *ser1;
 static lv_chart_series_t *ser2;
 
 NasStatusSnapshot nasStatus;
 
-lv_coord_t up_speed_max = 0;
-lv_coord_t down_speed_max = 0;
+static const uint16_t NET_SAMPLE_INTERVAL_MS = 200; // Physical-device tuning knob: 300ms is the fallback if telemetry shows misses.
+static const uint8_t CHART_POINT_COUNT = 10000 / NET_SAMPLE_INTERVAL_MS;
+static uint32_t uploadSeries[CHART_POINT_COUNT] = {0};
+static uint32_t downloadSeries[CHART_POINT_COUNT] = {0};
+
 // 监测数值
-double up_speed = 0;
-double down_speed = 0;
 double cpu_usage = 0;
 double gpu_usage = 0;
 double mem_usage = 0;
-double temp_value = 0;
 uint32_t nas_uptime_seconds = 0;
-lv_coord_t upload_serise[10] = {0};
-lv_coord_t download_serise[10] = {0};
 
 #if LV_USE_LOG != 0
 /* Serial debugging */
@@ -102,12 +100,6 @@ void setupPages()
 // 设置login_page显示组件
 void initLoginPage()
 {
-    lv_style_t login_spinner_style;
-    lv_style_init(&login_spinner_style);
-    lv_style_set_line_width(&login_spinner_style, LV_STATE_DEFAULT, 5);
-    lv_style_set_pad_left(&login_spinner_style, LV_STATE_DEFAULT, 5);
-    lv_style_set_line_color(&login_spinner_style, LV_STATE_DEFAULT, lv_color_hex(0xff5d18));
-
     lv_obj_t *preload = lv_spinner_create(login_page, NULL);
     lv_obj_set_size(preload, 100, 100);
     lv_obj_align(preload, NULL, LV_ALIGN_CENTER, 0, 0);
@@ -154,7 +146,7 @@ void connectWiFi()
 
     startConfigPortal();
 
-    // NTP 使用 UTC+8，显示 24 小时制北京时间。
+    // NTP uses UTC+8 and a 24-hour clock.
     configTime(8 * 3600, 0, "ntp.aliyun.com", "ntp1.aliyun.com", "pool.ntp.org");
 }
 
@@ -187,35 +179,6 @@ bool read_encoder(lv_indev_drv_t *indev, lv_indev_data_t *data)
     return false;
 }
 
-lv_coord_t updateNetSeries(lv_coord_t *series, double speed)
-{
-    lv_coord_t local_max = series[0];
-    for (int index = 0; index < 9; index++)
-    {
-        series[index] = series[index + 1];
-        if (local_max < series[index])
-        {
-            local_max = series[index];
-        }
-    }
-    series[9] = (lv_coord_t)speed;
-    if (local_max < series[9])
-        local_max = series[9];
-
-    Serial.print(speed);
-    Serial.print("->");
-    Serial.print(series[9]);
-    Serial.print("    |");
-    for (int i = 0; i < 10; i++)
-    {
-        Serial.print(series[i]);
-        Serial.print(" ");
-    }
-    Serial.println();
-
-    return local_max;
-}
-
 bool refreshMonitorData()
 {
     if (getNasStatus(nasStatus))
@@ -223,93 +186,342 @@ bool refreshMonitorData()
         cpu_usage = nasStatus.cpuPercent;
         gpu_usage = nasStatus.gpuPercent;
         mem_usage = nasStatus.memoryPercent;
-        temp_value = nasStatus.temperature;
         nas_uptime_seconds = nasStatus.uptimeSeconds;
-        down_speed = nasStatus.rxBytesPerSecond / 1024.0;
-        up_speed = nasStatus.txBytesPerSecond / 1024.0;
-
-        down_speed_max = updateNetSeries(download_serise, down_speed);
-        up_speed_max = updateNetSeries(upload_serise, up_speed);
-        lv_chart_set_points(chart, ser2, download_serise);
-        lv_chart_set_points(chart, ser1, upload_serise);
         return true;
     }
     return false;
 }
 
+static lv_coord_t textWidth(const char *text, const lv_font_t *font)
+{
+    return _lv_txt_get_width(text, strlen(text), font, 0, LV_TXT_FLAG_NONE);
+}
+
+// Each direction owns 112px. Large network values fall back to 22px.
+static void updateTransferValue(lv_obj_t *icon, lv_obj_t *value, lv_obj_t *unit,
+                                double bytes, bool rate, lv_coord_t left, lv_coord_t baseline,
+                                const lv_font_t *preferredFont)
+{
+    const TransferText text = formatTransfer(bytes, rate);
+    const lv_font_t *font = preferredFont;
+    const lv_coord_t iconWidth = textWidth(lv_label_get_text(icon), &lv_font_montserrat_12);
+    const lv_coord_t unitWidth = textWidth(text.unit, &lv_font_montserrat_12);
+    if (iconWidth + textWidth(text.number, font) + unitWidth + 2 > 112)
+        font = &lv_font_montserrat_22;
+    const lv_coord_t valueWidth = textWidth(text.number, font);
+    const lv_coord_t x = left + (112 - iconWidth - valueWidth - unitWidth - 2) / 2;
+    lv_obj_set_style_local_text_font(value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, font);
+    lv_label_set_text(value, text.number);
+    lv_label_set_text(unit, text.unit);
+    lv_obj_set_pos(icon, x, baseline - (lv_font_montserrat_12.line_height - lv_font_montserrat_12.base_line));
+    lv_obj_set_pos(value, x + iconWidth + 1, baseline - (font->line_height - font->base_line));
+    lv_obj_set_pos(unit, x + iconWidth + valueWidth + 2,
+                   baseline - (lv_font_montserrat_12.line_height - lv_font_montserrat_12.base_line));
+}
+
 void updateNetworkInfoLabel()
 {
-    if (up_speed < 100.0)
+    updateTransferValue(upload_label, up_speed_label, up_speed_unit_label,
+                        nasStatus.txBytesPerSecond, true, 5, 43, &lv_font_montserrat_42);
+    updateTransferValue(download_label, down_speed_label, down_speed_unit_label,
+                        nasStatus.rxBytesPerSecond, true, 123, 43, &lv_font_montserrat_42);
+}
+
+static uint32_t chartRate(double bytesPerSecond)
+{
+    if (!isfinite(bytesPerSecond) || bytesPerSecond <= 0)
+        return 0;
+    return bytesPerSecond >= UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(bytesPerSecond);
+}
+
+static void appendChartSample(double rxBytesPerSecond, double txBytesPerSecond)
+{
+    memmove(downloadSeries, downloadSeries + 1, sizeof(downloadSeries) - sizeof(downloadSeries[0]));
+    memmove(uploadSeries, uploadSeries + 1, sizeof(uploadSeries) - sizeof(uploadSeries[0]));
+    downloadSeries[CHART_POINT_COUNT - 1] = chartRate(rxBytesPerSecond);
+    uploadSeries[CHART_POINT_COUNT - 1] = chartRate(txBytesPerSecond);
+
+    uint32_t maximum = 1;
+    for (uint8_t index = 0; index < CHART_POINT_COUNT; ++index)
+        maximum = max(maximum, max(downloadSeries[index], uploadSeries[index]));
+    const uint32_t scale = maximum / 1000 + (maximum % 1000 != 0);
+
+    lv_coord_t points[CHART_POINT_COUNT];
+    for (uint8_t index = 0; index < CHART_POINT_COUNT; ++index)
+        points[index] = static_cast<lv_coord_t>(uploadSeries[index] / scale);
+    lv_chart_set_points(chart, ser1, points);
+    for (uint8_t index = 0; index < CHART_POINT_COUNT; ++index)
+        points[index] = static_cast<lv_coord_t>(downloadSeries[index] / scale);
+    lv_chart_set_points(chart, ser2, points);
+}
+
+static void net_task_cb(lv_task_t *task)
+{
+    static NasNetSample previous;
+    static NasNetSample speedBaseline;
+    static bool havePrevious = false;
+    static bool rateVisible = false;
+    static uint32_t lastSuccessAt = 0;
+    static uint32_t reportAt = 0;
+    static uint32_t latencyTotal = 0;
+    static uint16_t requests = 0;
+    static uint16_t successes = 0;
+    static uint16_t failures = 0;
+    static uint16_t late = 0;
+    static uint16_t plotted = 0;
+    static uint16_t maximumLatency = 0;
+
+    const uint32_t startedAt = millis();
+    NasNetSample current;
+    const bool ok = getNasNetSample(current);
+    const uint16_t latency = static_cast<uint16_t>(min(millis() - startedAt, 65535UL));
+    ++requests;
+    latencyTotal += latency;
+    maximumLatency = max(maximumLatency, latency);
+    if (latency > NET_SAMPLE_INTERVAL_MS)
+        ++late;
+
+    if (!ok)
     {
-        // < 99.99 K/S
-        lv_label_set_text_fmt(up_speed_label, "%.2f", up_speed);
-        lv_label_set_text(up_speed_unit_label, "k/s");
+        lv_task_set_period(task, 1000);
+        ++failures;
+        if (rateVisible && millis() - lastSuccessAt > 2000)
+        {
+            rateVisible = false;
+            havePrevious = false;
+            nasStatus.rxBytesPerSecond = -1;
+            nasStatus.txBytesPerSecond = -1;
+            updateNetworkInfoLabel();
+        }
     }
-    else if (up_speed < 1000.0)
+    else
     {
-        // 999.9 K/S
-        lv_label_set_text_fmt(up_speed_label, "%.1f", up_speed);
-        lv_label_set_text(up_speed_unit_label, "k/s");
-    }
-    else if (up_speed < 100000.0)
-    {
-        // 99.99 M/S
-        up_speed /= 1024.0;
-        lv_label_set_text_fmt(up_speed_label, "%.2f", up_speed);
-        lv_label_set_text(up_speed_unit_label, "m/s");
-    }
-    else if (up_speed < 1000000.0)
-    {
-        // 999.9 M/S
-        up_speed = up_speed / 1024.0;
-        lv_label_set_text_fmt(up_speed_label, "%.1f", up_speed);
-        lv_label_set_text(up_speed_unit_label, "m/s");
+        lv_task_set_period(task, NET_SAMPLE_INTERVAL_MS);
+        ++successes;
+        lastSuccessAt = millis();
+        if (!havePrevious)
+        {
+            previous = current;
+            speedBaseline = current;
+            havePrevious = true;
+        }
+        else
+        {
+            NetRate adjacent;
+            if (!calculateNetRate(previous, current, adjacent))
+            {
+                speedBaseline = current;
+            }
+            else
+            {
+                if (adjacent.elapsedSeconds <= 1.0)
+                {
+                    appendChartSample(adjacent.rxBytesPerSecond, adjacent.txBytesPerSecond);
+                    ++plotted;
+                }
+
+                NetRate average;
+                if (!calculateNetRate(speedBaseline, current, average))
+                    speedBaseline = current;
+                else if (average.elapsedSeconds >= 1.0)
+                {
+                    if (average.elapsedSeconds <= 2.0)
+                    {
+                        nasStatus.rxBytesPerSecond = average.rxBytesPerSecond;
+                        nasStatus.txBytesPerSecond = average.txBytesPerSecond;
+                        rateVisible = true;
+                        updateNetworkInfoLabel();
+                    }
+                    speedBaseline = current;
+                }
+            }
+            previous = current;
+        }
     }
 
-    if (down_speed < 100.0)
+    if (millis() - reportAt >= 10000)
     {
-        // < 99.99 K/S
-        lv_label_set_text_fmt(down_speed_label, "%.2f", down_speed);
-        lv_label_set_text(down_speed_unit_label, "k/s");
-    }
-    else if (down_speed < 1000.0)
-    {
-        // 999.9 K/S
-        lv_label_set_text_fmt(down_speed_label, "%.1f", down_speed);
-        lv_label_set_text(down_speed_unit_label, "k/s");
-    }
-    else if (down_speed < 100000.0)
-    {
-        // 99.99 M/S
-        down_speed /= 1024.0;
-        lv_label_set_text_fmt(down_speed_label, "%.2f", down_speed);
-        lv_label_set_text(down_speed_unit_label, "m/s");
-    }
-    else if (down_speed < 1000000.0)
-    {
-        // 999.9 M/S
-        down_speed = down_speed / 1024.0;
-        lv_label_set_text_fmt(down_speed_label, "%.1f", down_speed);
-        lv_label_set_text(down_speed_unit_label, "m/s");
+        Serial.printf("NET %ums req=%u ok=%u fail=%u plot=%u avg=%lums max=%ums late=%u heap=%u\r\n",
+                      NET_SAMPLE_INTERVAL_MS, requests, successes, failures, plotted,
+                      requests ? static_cast<unsigned long>(latencyTotal / requests) : 0,
+                      maximumLatency, late, ESP.getFreeHeap());
+        reportAt = millis();
+        latencyTotal = requests = successes = failures = late = plotted = maximumLatency = 0;
     }
 }
 
-void updateChartRange()
+static lv_coord_t carouselColumnWidth(uint8_t count)
 {
-    lv_coord_t max_speed = max(down_speed_max, up_speed_max);
-    max_speed = max(max_speed, (lv_coord_t)16);
-    lv_chart_set_range(chart, 0, (lv_coord_t)(max_speed * 1.1));
+    return count == 1 ? 230 : (count == 2 ? 112 : 72);
+}
+
+static lv_coord_t carouselColumnLeft(uint8_t count, uint8_t index)
+{
+    if (count == 1)
+        return 5;
+    if (count == 2)
+        return index == 0 ? 5 : 123;
+    return index == 0 ? 5 : (index == 1 ? 84 : 163);
+}
+
+static void layoutCarousel(uint8_t count)
+{
+    const lv_coord_t width = carouselColumnWidth(count);
+    for (uint8_t index = 0; index < 3; ++index)
+    {
+        const bool hidden = index >= count;
+        lv_obj_set_hidden(carousel_title[index], hidden);
+        lv_obj_set_hidden(carousel_value[index], hidden);
+        if (hidden)
+            continue;
+        const lv_coord_t left = carouselColumnLeft(count, index);
+        lv_obj_set_size(carousel_title[index], width, 15);
+        lv_obj_set_pos(carousel_title[index], left, 95);
+        lv_obj_set_size(carousel_value[index], width, 24);
+        lv_obj_set_pos(carousel_value[index], left, 110);
+    }
+}
+
+static void setCarouselText(uint8_t index, const char *title, const char *value, lv_color_t color,
+                            lv_coord_t width)
+{
+    const lv_font_t *font = textWidth(value, &lv_font_montserrat_22) <= width
+                                ? &lv_font_montserrat_22
+                                : &lv_font_montserrat_12;
+    lv_label_set_text(carousel_title[index], title);
+    lv_label_set_text(carousel_value[index], value);
+    lv_obj_set_style_local_text_color(carousel_title[index], LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, color);
+    lv_obj_set_style_local_text_color(carousel_value[index], LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, color);
+    lv_obj_set_style_local_text_font(carousel_value[index], LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, font);
+}
+
+static void formatBytes(char *buffer, size_t size, double bytes)
+{
+    const TransferText text = formatTransfer(bytes, false);
+    snprintf(buffer, size, "%s%s", text.number, text.unit);
+}
+
+static void renderCarousel()
+{
+    static const lv_color_t red = LV_COLOR_RED;
+    static const lv_color_t blue = lv_color_hex(0x278fbd);
+    static const lv_color_t green = lv_color_hex(0x20c864);
+    static const lv_color_t amber = lv_color_hex(0xedbd76);
+    char first[20] = "--";
+    char second[20] = "--";
+    char third[20] = "--";
+    char firstTitle[20] = "UP 24H";
+    char secondTitle[20] = "DOWN 24H";
+
+    if (carouselPage == 0)
+    {
+        layoutCarousel(2);
+        if (nasOnline && nasStatus.trafficHistoryValid)
+        {
+            formatBytes(first, sizeof(first), nasStatus.txBytes24h);
+            formatBytes(second, sizeof(second), nasStatus.rxBytes24h);
+            if (nasStatus.trafficCoverageSeconds < 3600)
+            {
+                snprintf(firstTitle, sizeof(firstTitle), "UP %luM", static_cast<unsigned long>(nasStatus.trafficCoverageSeconds / 60));
+                snprintf(secondTitle, sizeof(secondTitle), "DOWN %luM", static_cast<unsigned long>(nasStatus.trafficCoverageSeconds / 60));
+            }
+            else if (nasStatus.trafficCoverageSeconds < 86400)
+            {
+                snprintf(firstTitle, sizeof(firstTitle), "UP %luH", static_cast<unsigned long>(nasStatus.trafficCoverageSeconds / 3600));
+                snprintf(secondTitle, sizeof(secondTitle), "DOWN %luH", static_cast<unsigned long>(nasStatus.trafficCoverageSeconds / 3600));
+            }
+        }
+        setCarouselText(0, firstTitle, first, red, 112);
+        setCarouselText(1, secondTitle, second, blue, 112);
+    }
+    else if (carouselPage == 1)
+    {
+        layoutCarousel(1);
+        if (nasOnline)
+        {
+            if (nas_uptime_seconds >= 86400UL)
+                snprintf(first, sizeof(first), "%lu D", static_cast<unsigned long>(nas_uptime_seconds / 86400UL));
+            else if (nas_uptime_seconds >= 3600UL)
+                snprintf(first, sizeof(first), "%lu H", static_cast<unsigned long>(nas_uptime_seconds / 3600UL));
+            else
+                snprintf(first, sizeof(first), "%lu M", static_cast<unsigned long>(nas_uptime_seconds / 60UL));
+        }
+        setCarouselText(0, "UPTIME", first, LV_COLOR_WHITE, 230);
+    }
+    else if (carouselPage == 2)
+    {
+        layoutCarousel(2);
+        if (nasOnline && nasStatus.cpuTemperature > 0)
+            snprintf(first, sizeof(first), "%.0f°C", nasStatus.cpuTemperature);
+        if (nasOnline && nasStatus.diskTemperature > 0)
+            snprintf(second, sizeof(second), "%.0f°C", nasStatus.diskTemperature);
+        setCarouselText(0, "CPU TEMP", first, green, 112);
+        setCarouselText(1, "DISK MAX", second, amber, 112);
+    }
+    else
+    {
+        layoutCarousel(3);
+        if (nasOnline && nasStatus.storageValid)
+        {
+            formatBytes(first, sizeof(first), nasStatus.storageTotalBytes);
+            formatBytes(second, sizeof(second), nasStatus.storageUsedBytes);
+            snprintf(third, sizeof(third), "%.0f%%", nasStatus.storagePercent);
+        }
+        setCarouselText(0, "TOTAL", first, LV_COLOR_WHITE, 72);
+        setCarouselText(1, "USED", second, amber, 72);
+        setCarouselText(2, "USE", third, green, 72);
+    }
+}
+
+static void updateDiskIo(bool online)
+{
+    const bool valid = online && nasStatus.diskIoValid;
+    updateTransferValue(disk_read_label, disk_read_value, disk_read_unit,
+                        valid ? nasStatus.diskReadBytesPerSecond : -1, true, 5, 91, &lv_font_montserrat_22);
+    updateTransferValue(disk_write_label, disk_write_value, disk_write_unit,
+                        valid ? nasStatus.diskWriteBytesPerSecond : -1, true, 123, 91, &lv_font_montserrat_22);
+}
+
+static void carousel_task_cb(lv_task_t *task)
+{
+    carouselPage = (carouselPage + 1) % 4;
+    renderCarousel();
 }
 
 void styleMetricBar(lv_obj_t *bar, lv_color_t indicatorColor, lv_color_t trackColor)
 {
-    lv_obj_set_size(bar, 107, 9);
+    lv_obj_set_size(bar, 72, 3);
     lv_obj_set_style_local_bg_color(bar, LV_BAR_PART_BG, LV_STATE_DEFAULT, trackColor);
     lv_obj_set_style_local_bg_color(bar, LV_BAR_PART_INDIC, LV_STATE_DEFAULT, indicatorColor);
     lv_obj_set_style_local_border_width(bar, LV_BAR_PART_BG, LV_STATE_DEFAULT, 0);
     lv_obj_set_style_local_border_width(bar, LV_BAR_PART_INDIC, LV_STATE_DEFAULT, 0);
     lv_obj_set_style_local_radius(bar, LV_BAR_PART_BG, LV_STATE_DEFAULT, 5);
     lv_obj_set_style_local_radius(bar, LV_BAR_PART_INDIC, LV_STATE_DEFAULT, 5);
+}
+
+static void createMetric(const char *titleText, lv_coord_t left, lv_color_t color,
+                         lv_obj_t *&value, lv_obj_t *&bar)
+{
+    lv_obj_t *title = lv_label_create(monitor_page, NULL);
+    lv_label_set_text(title, titleText);
+    lv_obj_set_style_local_text_font(title, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
+    lv_obj_set_style_local_text_color(title, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
+    lv_label_set_align(title, LV_LABEL_ALIGN_CENTER);
+    lv_obj_set_size(title, 72, 15);
+    lv_obj_set_pos(title, left, 183);
+
+    value = lv_label_create(monitor_page, NULL);
+    lv_label_set_text(value, "0%");
+    lv_obj_set_style_local_text_font(value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_22);
+    lv_obj_set_style_local_text_color(value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
+    lv_label_set_align(value, LV_LABEL_ALIGN_CENTER);
+    lv_label_set_long_mode(value, LV_LABEL_LONG_CROP);
+    lv_obj_set_size(value, 72, 24);
+    lv_obj_set_pos(value, left, 199);
+
+    bar = lv_bar_create(monitor_page, NULL);
+    styleMetricBar(bar, color, lv_color_hex(0x1e3644));
+    lv_obj_set_pos(bar, left, 228);
 }
 
 static void updateNightMode(uint8_t hour)
@@ -330,68 +542,31 @@ static void clock_task_cb(lv_task_t *task)
     time_t now = time(nullptr);
     if (now < 1609459200)
     {
-        lv_label_set_text(time_label, "--:--");
+        lv_label_set_text(weekday_label, "---");
+        lv_label_set_text(date_label, "-- --");
+        lv_label_set_text(time_label, "--:--:--");
         return;
     }
 
     struct tm timeInfo;
     localtime_r(&now, &timeInfo);
     updateNightMode(timeInfo.tm_hour);
-    char timeText[6];
-    char displayText[24];
-    snprintf(timeText, sizeof(timeText), "%02d:%02d", timeInfo.tm_hour, timeInfo.tm_min);
-    // 用与信息框相同的颜色隐藏冒号，文字宽度保持不变，数字不会左右跳动。
-    snprintf(displayText, sizeof(displayText), "%02d#%s :#%02d", timeInfo.tm_hour,
-             (timeInfo.tm_sec & 1) ? "081418" : "ffffff", timeInfo.tm_min);
-    lv_label_set_text(time_label, displayText);
+    static const char *weekdays[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
+    char timeText[9];
+    char dateText[16];
+    snprintf(timeText, sizeof(timeText), "%02d:%02d:%02d", timeInfo.tm_hour, timeInfo.tm_min, timeInfo.tm_sec);
+    snprintf(dateText, sizeof(dateText), "%02d-%02d", timeInfo.tm_mon + 1, timeInfo.tm_mday);
+    lv_label_set_text(weekday_label, weekdays[timeInfo.tm_wday]);
+    lv_label_set_text(date_label, dateText);
+    lv_label_set_text(time_label, timeText);
 
     static int lastLoggedMinute = -1;
     if (timeInfo.tm_min != lastLoggedMinute)
     {
         lastLoggedMinute = timeInfo.tm_min;
         Serial.print(F("Time: "));
-        Serial.println(timeText);
+        Serial.printf("%02d:%02d\r\n", timeInfo.tm_hour, timeInfo.tm_min);
     }
-}
-
-static lv_coord_t labelTextWidth(lv_obj_t *label, const lv_font_t *font)
-{
-    const char *text = lv_label_get_text(label);
-    return _lv_txt_get_width(text, strlen(text), font, 0, LV_TXT_FLAG_NONE);
-}
-
-static void layoutCompactInfoRow()
-{
-    const uint32_t uptimeDays = nas_uptime_seconds / 86400UL;
-    const bool compactLongUptime = uptimeDays >= 1000UL;
-    const bool threeDigitUptime = uptimeDays >= 100UL;
-    const lv_font_t *uptimeValueFont = compactLongUptime
-                                              ? &lv_font_montserrat_16
-                                              : (threeDigitUptime ? &lv_font_montserrat_22 : &lv_font_montserrat_22);
-    const lv_coord_t uptimeValueY = compactLongUptime ? 146 : (threeDigitUptime ? 141 : 143);
-    lv_obj_set_style_local_text_font(uptime_value_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, uptimeValueFont);
-
-    const lv_coord_t valueWidth = labelTextWidth(uptime_value_label, uptimeValueFont);
-    const lv_coord_t unitWidth = labelTextWidth(uptime_unit_label, &lv_font_montserrat_16);
-    const lv_coord_t unitGap = unitWidth > 0 ? 2 : 1;
-    const lv_coord_t uptimeUnitX = 58 - unitWidth;
-    lv_coord_t uptimeValueX = uptimeUnitX - unitGap - valueWidth;
-    if (uptimeValueX < 6)
-        uptimeValueX = 6;
-
-    lv_obj_set_width(uptime_value_label, valueWidth);
-    lv_label_set_align(uptime_value_label, LV_LABEL_ALIGN_LEFT);
-    lv_obj_set_pos(uptime_value_label, uptimeValueX, uptimeValueY);
-    lv_obj_set_pos(uptime_unit_label, uptimeUnitX, 152);
-
-    const lv_coord_t tempWidth = labelTextWidth(temp_value_label, &lv_font_montserrat_22);
-    const lv_coord_t tempUnitWidth = labelTextWidth(temp_unit_label, &lv_font_montserrat_16);
-    const lv_coord_t tempUnitX = 112 - tempUnitWidth;
-    const lv_coord_t tempX = tempUnitX - tempWidth - 1;
-    lv_obj_set_width(temp_value_label, tempWidth);
-    lv_label_set_align(temp_value_label, LV_LABEL_ALIGN_LEFT);
-    lv_obj_set_pos(temp_value_label, tempX, 143);
-    lv_obj_set_pos(temp_unit_label, tempUnitX, 152);
 }
 
 // task循环执行的函数
@@ -406,6 +581,9 @@ static void task_cb(lv_task_t *task)
         connectWiFi();
         if (WiFi.status() != WL_CONNECTED)
         {
+            nasOnline = false;
+            updateDiskIo(false);
+            renderCarousel();
             if (!isConfigPortalApMode())
             {
                 ++wifiFailures;
@@ -424,6 +602,9 @@ static void task_cb(lv_task_t *task)
         nasFailures = 0;
     else
     {
+        nasOnline = false;
+        updateDiskIo(false);
+        renderCarousel();
         ++nasFailures;
         if (nasFailures == 30)
             WiFi.reconnect();
@@ -431,66 +612,18 @@ static void task_cb(lv_task_t *task)
             ESP.restart();
         return;
     }
-    updateChartRange();
-    lv_chart_refresh(chart);
-
-    updateNetworkInfoLabel();
+    nasOnline = true;
+    updateDiskIo(true);
+    renderCarousel();
 
     lv_bar_set_value(cpu_bar, cpu_usage, LV_ANIM_OFF);
-    lv_label_set_text_fmt(cpu_value_label, "%.0f", cpu_usage);
+    lv_label_set_text_fmt(cpu_value_label, "%.0f%%", cpu_usage);
 
     lv_bar_set_value(gpu_bar, gpu_usage, LV_ANIM_OFF);
-    lv_label_set_text_fmt(gpu_value_label, "%.0f", gpu_usage);
+    lv_label_set_text_fmt(gpu_value_label, "%.0f%%", gpu_usage);
 
     lv_bar_set_value(mem_bar, mem_usage, LV_ANIM_OFF);
-    lv_label_set_text_fmt(mem_value_label, "%.0f", mem_usage);
-
-    lv_label_set_text_fmt(temp_value_label, "%.0f", temp_value);
-
-    const uint32_t displayUptimeSeconds = nas_uptime_seconds;
-    if (displayUptimeSeconds >= 86400UL)
-    {
-        const uint32_t days = displayUptimeSeconds / 86400UL;
-        lv_label_set_text(uptime_unit_label, "D");
-        if (days < 1000UL)
-            lv_label_set_text_fmt(uptime_value_label, "%lu", static_cast<unsigned long>(days));
-        else if (days < 10000UL)
-        {
-            lv_label_set_text_fmt(uptime_value_label, "%.1fK", days / 1000.0);
-            lv_label_set_text(uptime_unit_label, "");
-        }
-        else if (days < 1000000UL)
-        {
-            lv_label_set_text_fmt(uptime_value_label, "%luK", static_cast<unsigned long>(days / 1000UL));
-            lv_label_set_text(uptime_unit_label, "");
-        }
-        else if (days < 10000000UL)
-        {
-            lv_label_set_text_fmt(uptime_value_label, "%.1fM", days / 1000000.0);
-            lv_label_set_text(uptime_unit_label, "");
-        }
-        else
-        {
-            lv_label_set_text_fmt(uptime_value_label, "%luM", static_cast<unsigned long>(days / 1000000UL));
-            lv_label_set_text(uptime_unit_label, "");
-        }
-    }
-    else if (displayUptimeSeconds >= 3600UL)
-    {
-        lv_label_set_text_fmt(uptime_value_label, "%lu", static_cast<unsigned long>(displayUptimeSeconds / 3600UL));
-        lv_label_set_text(uptime_unit_label, "H");
-    }
-    else
-    {
-        lv_label_set_text_fmt(uptime_value_label, "%lu", static_cast<unsigned long>(displayUptimeSeconds / 60UL));
-        lv_label_set_text(uptime_unit_label, "M");
-    }
-    layoutCompactInfoRow();
-    const lv_color_t tempColor = temp_value < 60.0
-                                     ? lv_color_hex(0x20c864)
-                                     : (temp_value <= 68.0 ? LV_COLOR_WHITE : lv_color_hex(0xd74747));
-    lv_obj_set_style_local_text_color(temp_value_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, tempColor);
-    lv_obj_set_style_local_text_color(temp_unit_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, tempColor);
+    lv_label_set_text_fmt(mem_value_label, "%.0f%%", mem_usage);
 
     if (ESP.getFreeHeap() < 7000)
         ++lowHeapSamples;
@@ -499,9 +632,11 @@ static void task_cb(lv_task_t *task)
     if (lowHeapSamples >= 10)
         ESP.restart();
 
-    // 测试内存泄漏
+    // Runtime heap diagnostics for physical-device tuning.
     Serial.print("⚠ Left Memory:");
     Serial.println(ESP.getFreeHeap());
+    Serial.printf("24H RX=%.0f TX=%.0f COVER=%lus VALID=%d\r\n", nasStatus.rxBytes24h,
+                  nasStatus.txBytes24h, static_cast<unsigned long>(nasStatus.trafficCoverageSeconds), nasStatus.trafficHistoryValid);
 }
 
 void setup()
@@ -518,6 +653,7 @@ void setup()
 
     tft.begin();        /* TFT init */
     tft.setRotation(0); /* Landscape orientation */
+    tft.fillScreen(TFT_BLACK);
 
     lv_disp_buf_init(&disp_buf, buf, NULL, LV_HOR_RES_MAX * 5);
 
@@ -540,271 +676,147 @@ void setup()
     setupPages();
     initLoginPage();
 
-    lv_obj_t *bg;
-    bg = lv_obj_create(monitor_page, NULL);
-    lv_obj_clean_style_list(bg, LV_OBJ_PART_MAIN);
-    lv_obj_set_style_local_bg_opa(bg, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_OPA_100);
-    lv_color_t bg_color = lv_color_hex(0x7381a2);
-    // bg_color = lv_color_hex(0xecdd5c);
-    lv_obj_set_style_local_bg_color(bg, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, bg_color);
-    lv_obj_set_size(bg, LV_HOR_RES_MAX, LV_VER_RES_MAX);
+    lv_obj_t *outer = lv_obj_create(monitor_page, NULL);
+    lv_obj_clean_style_list(outer, LV_OBJ_PART_MAIN);
+    lv_obj_set_style_local_bg_opa(outer, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_OPA_100);
+    lv_obj_set_style_local_bg_color(outer, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_BLACK);
+    lv_obj_set_size(outer, 240, 240);
 
-    lv_obj_t *cont = lv_cont_create(monitor_page, NULL);
-    lv_obj_set_auto_realign(cont, true); /*Auto realign when the size changes*/
-    // lv_obj_align_origo(cont, NULL, LV_ALIGN_IN_TOP_LEFT, 120, 35);  /*This parametrs will be sued when realigned*/
-    // lv_color_t cont_color = lv_color_hex(0x1a1d25);
-    lv_color_t cont_color = lv_color_hex(0x081418);
-    lv_obj_set_width(cont, 230);
-    lv_obj_set_height(cont, 120);
-    lv_obj_set_pos(cont, 5, 5);
+    const lv_color_t contentColor = lv_color_hex(0x081418);
+    const lv_color_t mutedColor = lv_color_hex(0x838a99);
+    const lv_color_t blue = lv_color_hex(0x278fbd);
+    const lv_color_t green = lv_color_hex(0x20c864);
+    const lv_color_t amber = lv_color_hex(0xedbd76);
 
-    lv_cont_set_fit(cont, LV_FIT_TIGHT);
-    lv_cont_set_layout(cont, LV_LAYOUT_COLUMN_MID);
-    lv_obj_set_style_local_border_color(cont, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, cont_color);
-    lv_obj_set_style_local_bg_color(cont, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, cont_color);
-    lv_obj_set_style_local_radius(cont, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, 24);
-
-    // Upload & Download Symbol
-    static lv_style_t iconfont;
-    lv_style_init(&iconfont);
-    lv_style_set_text_font(&iconfont, LV_STATE_DEFAULT, &lv_font_montserrat_16);
+    lv_obj_t *content = lv_obj_create(monitor_page, NULL);
+    lv_obj_clean_style_list(content, LV_OBJ_PART_MAIN);
+    lv_obj_set_style_local_bg_opa(content, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_OPA_100);
+    lv_obj_set_style_local_bg_color(content, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, contentColor);
+    lv_obj_set_size(content, 230, 230);
+    lv_obj_set_pos(content, 5, 5);
 
     upload_label = lv_label_create(monitor_page, NULL);
-    lv_obj_add_style(upload_label, LV_LABEL_PART_MAIN, &iconfont);
     lv_label_set_text(upload_label, LV_SYMBOL_UPLOAD);
-    lv_color_t speed_label_color = lv_color_hex(0x838a99);
-    lv_obj_set_style_local_text_color(upload_label, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_RED);
-    lv_obj_set_pos(upload_label, 10, 18);
+    lv_obj_set_style_local_text_font(upload_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
+    lv_obj_set_style_local_text_color(upload_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_RED);
+    up_speed_label = lv_label_create(monitor_page, NULL);
+    lv_label_set_text(up_speed_label, "--");
+    lv_obj_set_style_local_text_font(up_speed_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_42);
+    lv_obj_set_style_local_text_color(up_speed_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
+    up_speed_unit_label = lv_label_create(monitor_page, NULL);
+    lv_label_set_text(up_speed_unit_label, "");
+    lv_obj_set_style_local_text_font(up_speed_unit_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
+    lv_obj_set_style_local_text_color(up_speed_unit_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, mutedColor);
 
     download_label = lv_label_create(monitor_page, NULL);
-    lv_obj_add_style(download_label, LV_LABEL_PART_MAIN, &iconfont);
     lv_label_set_text(download_label, LV_SYMBOL_DOWNLOAD);
-    speed_label_color = lv_color_hex(0x838a99);
-    lv_obj_set_style_local_text_color(download_label, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, lv_color_hex(0x278fbd));
-    lv_obj_set_pos(download_label, 120, 18);
-
-    // Upload & Download Speed Display
-    static lv_style_t font_22;
-    lv_style_init(&font_22);
-    // lv_style_set_text_font(&font_22, LV_STATE_DEFAULT, &lv_font_montserrat_22);
-    lv_style_set_text_font(&font_22, LV_STATE_DEFAULT, &lv_font_montserrat_22);
-
-    up_speed_label = lv_label_create(monitor_page, NULL);
-    lv_label_set_text(up_speed_label, "56.78");
-    lv_obj_add_style(up_speed_label, LV_LABEL_PART_MAIN, &font_22);
-    lv_obj_set_style_local_text_color(up_speed_label, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
-    lv_obj_set_pos(up_speed_label, 30, 15);
-
-    up_speed_unit_label = lv_label_create(monitor_page, NULL);
-    lv_label_set_text(up_speed_unit_label, "K/S");
-    lv_obj_set_style_local_text_color(up_speed_unit_label, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, speed_label_color);
-    lv_obj_set_pos(up_speed_unit_label, 90, 18);
-
+    lv_obj_set_style_local_text_font(download_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
+    lv_obj_set_style_local_text_color(download_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, blue);
     down_speed_label = lv_label_create(monitor_page, NULL);
-    lv_label_set_text(down_speed_label, "12.34");
-    lv_obj_add_style(down_speed_label, LV_LABEL_PART_MAIN, &font_22);
-    lv_obj_set_style_local_text_color(down_speed_label, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
-    lv_obj_set_pos(down_speed_label, 142, 15);
-
+    lv_label_set_text(down_speed_label, "--");
+    lv_obj_set_style_local_text_font(down_speed_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_42);
+    lv_obj_set_style_local_text_color(down_speed_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
     down_speed_unit_label = lv_label_create(monitor_page, NULL);
-    lv_label_set_text(down_speed_unit_label, "M/S");
-    lv_obj_set_style_local_text_color(down_speed_unit_label, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, speed_label_color);
-    lv_obj_set_pos(down_speed_unit_label, 202, 18);
+    lv_label_set_text(down_speed_unit_label, "");
+    lv_obj_set_style_local_text_font(down_speed_unit_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
+    lv_obj_set_style_local_text_color(down_speed_unit_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, mutedColor);
+    updateNetworkInfoLabel();
 
-    // 绘制曲线图
-    /*Create a chart*/
     chart = lv_chart_create(monitor_page, NULL);
-    lv_obj_set_size(chart, 220, 70);
-    lv_obj_align(chart, NULL, LV_ALIGN_CENTER, 0, -40);
-    lv_obj_set_style_local_radius(chart, LV_CHART_PART_BG, LV_STATE_DEFAULT, 16);
-    lv_chart_set_type(chart, LV_CHART_TYPE_LINE); /*Show lines and points too*/
-    lv_chart_set_range(chart, 0, 4096);
-    lv_chart_set_point_count(chart, 10); // 设置显示点数
-    lv_chart_set_update_mode(chart, LV_CHART_UPDATE_MODE_SHIFT);
-
-    /*Add a faded are effect*/
-    lv_obj_set_style_local_bg_opa(chart, LV_CHART_PART_SERIES, LV_STATE_DEFAULT, LV_OPA_50); /*Max. opa.*/
-    lv_obj_set_style_local_bg_grad_dir(chart, LV_CHART_PART_SERIES, LV_STATE_DEFAULT, LV_GRAD_DIR_VER);
-    lv_obj_set_style_local_bg_main_stop(chart, LV_CHART_PART_SERIES, LV_STATE_DEFAULT, 255); /*Max opa on the top*/
-    lv_obj_set_style_local_bg_grad_stop(chart, LV_CHART_PART_SERIES, LV_STATE_DEFAULT, 0);   /*Transparent on the bottom*/
-
-    /*Add two data series*/
+    lv_obj_set_size(chart, 220, 20);
+    lv_obj_set_pos(chart, 10, 51);
+    lv_obj_set_style_local_pad_left(chart, LV_CHART_PART_BG, LV_STATE_DEFAULT, 0);
+    lv_obj_set_style_local_pad_right(chart, LV_CHART_PART_BG, LV_STATE_DEFAULT, 0);
+    lv_obj_set_style_local_pad_top(chart, LV_CHART_PART_BG, LV_STATE_DEFAULT, 0);
+    lv_obj_set_style_local_pad_bottom(chart, LV_CHART_PART_BG, LV_STATE_DEFAULT, 0);
+    lv_obj_set_style_local_bg_color(chart, LV_CHART_PART_BG, LV_STATE_DEFAULT, contentColor);
+    lv_obj_set_style_local_border_width(chart, LV_CHART_PART_BG, LV_STATE_DEFAULT, 0);
+    lv_obj_set_style_local_radius(chart, LV_CHART_PART_BG, LV_STATE_DEFAULT, 0);
+    lv_obj_set_style_local_size(chart, LV_CHART_PART_SERIES, LV_STATE_DEFAULT, 0);
+    lv_obj_set_style_local_line_width(chart, LV_CHART_PART_SERIES, LV_STATE_DEFAULT, 2);
+    lv_chart_set_div_line_count(chart, 0, 0);
+    lv_chart_set_type(chart, LV_CHART_TYPE_LINE);
+    lv_chart_set_range(chart, 0, 1000);
+    lv_chart_set_point_count(chart, CHART_POINT_COUNT);
     ser1 = lv_chart_add_series(chart, LV_COLOR_RED);
-    ser2 = lv_chart_add_series(chart, lv_color_hex(0x278fbd));
+    ser2 = lv_chart_add_series(chart, blue);
+    lv_chart_init_points(chart, ser1, 0);
+    lv_chart_init_points(chart, ser2, 0);
 
-    // /*Directly set points on 'ser2'*/
-    lv_chart_set_points(chart, ser2, download_serise);
-    lv_chart_set_points(chart, ser1, upload_serise);
+    disk_read_label = lv_label_create(monitor_page, NULL);
+    lv_label_set_text(disk_read_label, "R");
+    lv_obj_set_style_local_text_font(disk_read_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
+    lv_obj_set_style_local_text_color(disk_read_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, green);
+    disk_read_value = lv_label_create(monitor_page, NULL);
+    lv_label_set_text(disk_read_value, "--");
+    lv_obj_set_style_local_text_font(disk_read_value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_22);
+    lv_obj_set_style_local_text_color(disk_read_value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
+    disk_read_unit = lv_label_create(monitor_page, NULL);
+    lv_label_set_text(disk_read_unit, "");
+    lv_obj_set_style_local_text_font(disk_read_unit, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
+    lv_obj_set_style_local_text_color(disk_read_unit, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, mutedColor);
 
-    lv_chart_refresh(chart); /*Required after direct set*/
+    disk_write_label = lv_label_create(monitor_page, NULL);
+    lv_label_set_text(disk_write_label, "W");
+    lv_obj_set_style_local_text_font(disk_write_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
+    lv_obj_set_style_local_text_color(disk_write_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, amber);
+    disk_write_value = lv_label_create(monitor_page, NULL);
+    lv_label_set_text(disk_write_value, "--");
+    lv_obj_set_style_local_text_font(disk_write_value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_22);
+    lv_obj_set_style_local_text_color(disk_write_value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
+    disk_write_unit = lv_label_create(monitor_page, NULL);
+    lv_label_set_text(disk_write_unit, "");
+    lv_obj_set_style_local_text_font(disk_write_unit, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
+    lv_obj_set_style_local_text_color(disk_write_unit, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, mutedColor);
+    updateDiskIo(false);
 
-    // 下半屏右侧：三行紧凑指标，适配 240x240 像素屏幕。
-    static lv_style_t metric_value_font;
-    lv_style_init(&metric_value_font);
-    lv_style_set_text_font(&metric_value_font, LV_STATE_DEFAULT, &lv_font_montserrat_22);
+    for (uint8_t index = 0; index < 3; ++index)
+    {
+        carousel_title[index] = lv_label_create(monitor_page, NULL);
+        lv_obj_set_style_local_text_font(carousel_title[index], LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
+        lv_label_set_align(carousel_title[index], LV_LABEL_ALIGN_CENTER);
+        lv_label_set_long_mode(carousel_title[index], LV_LABEL_LONG_CROP);
+        carousel_value[index] = lv_label_create(monitor_page, NULL);
+        lv_obj_set_style_local_text_font(carousel_value[index], LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_22);
+        lv_label_set_align(carousel_value[index], LV_LABEL_ALIGN_CENTER);
+        lv_label_set_long_mode(carousel_value[index], LV_LABEL_LONG_CROP);
+    }
+    renderCarousel();
 
-    static lv_style_t metric_title_font;
-    lv_style_init(&metric_title_font);
-    lv_style_set_text_font(&metric_title_font, LV_STATE_DEFAULT, &lv_font_montserrat_16);
+    weekday_label = lv_label_create(monitor_page, NULL);
+    lv_label_set_text(weekday_label, "---");
+    lv_obj_set_style_local_text_font(weekday_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
+    lv_obj_set_style_local_text_color(weekday_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, mutedColor);
+    lv_label_set_align(weekday_label, LV_LABEL_ALIGN_CENTER);
+    lv_obj_set_size(weekday_label, 42, 15);
+    lv_obj_set_pos(weekday_label, 5, 141);
 
-    static lv_style_t metric_unit_font;
-    lv_style_init(&metric_unit_font);
-    lv_style_set_text_font(&metric_unit_font, LV_STATE_DEFAULT, &lv_font_montserrat_16);
-
-    const lv_color_t cpu_color = lv_color_hex(0xd74747);
-    const lv_color_t gpu_color = lv_color_hex(0x278fbd);
-    const lv_color_t mem_color = lv_color_hex(0x20c864);
-    const lv_color_t track_color = lv_color_hex(0x1e3644);
-
-    lv_obj_t *cpu_title = lv_label_create(monitor_page, NULL);
-    lv_label_set_text(cpu_title, "CPU");
-    lv_obj_add_style(cpu_title, LV_LABEL_PART_MAIN, &metric_title_font);
-    lv_obj_set_style_local_text_color(cpu_title, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
-    lv_obj_set_pos(cpu_title, 124, 137);
-
-    cpu_value_label = lv_label_create(monitor_page, NULL);
-    lv_label_set_text(cpu_value_label, "0");
-    lv_obj_add_style(cpu_value_label, LV_LABEL_PART_MAIN, &metric_value_font);
-    lv_obj_set_style_local_text_color(cpu_value_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
-    lv_label_set_long_mode(cpu_value_label, LV_LABEL_LONG_CROP);
-    lv_obj_set_width(cpu_value_label, 51);
-    lv_label_set_align(cpu_value_label, LV_LABEL_ALIGN_RIGHT);
-    lv_obj_set_pos(cpu_value_label, 167, 133);
-
-    cpu_percent_label = lv_label_create(monitor_page, NULL);
-    lv_label_set_text(cpu_percent_label, "%");
-    lv_obj_add_style(cpu_percent_label, LV_LABEL_PART_MAIN, &metric_unit_font);
-    lv_obj_set_style_local_text_color(cpu_percent_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
-    lv_obj_set_pos(cpu_percent_label, 218, 139);
-
-    cpu_bar = lv_bar_create(monitor_page, NULL);
-    styleMetricBar(cpu_bar, cpu_color, track_color);
-    lv_obj_set_pos(cpu_bar, 124, 154);
-
-    lv_obj_t *gpu_title = lv_label_create(monitor_page, NULL);
-    lv_label_set_text(gpu_title, "GPU");
-    lv_obj_add_style(gpu_title, LV_LABEL_PART_MAIN, &metric_title_font);
-    lv_obj_set_style_local_text_color(gpu_title, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
-    lv_obj_set_pos(gpu_title, 124, 168);
-
-    gpu_value_label = lv_label_create(monitor_page, NULL);
-    lv_label_set_text(gpu_value_label, "0");
-    lv_obj_add_style(gpu_value_label, LV_LABEL_PART_MAIN, &metric_value_font);
-    lv_obj_set_style_local_text_color(gpu_value_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
-    lv_label_set_long_mode(gpu_value_label, LV_LABEL_LONG_CROP);
-    lv_obj_set_width(gpu_value_label, 51);
-    lv_label_set_align(gpu_value_label, LV_LABEL_ALIGN_RIGHT);
-    lv_obj_set_pos(gpu_value_label, 167, 164);
-
-    gpu_percent_label = lv_label_create(monitor_page, NULL);
-    lv_label_set_text(gpu_percent_label, "%");
-    lv_obj_add_style(gpu_percent_label, LV_LABEL_PART_MAIN, &metric_unit_font);
-    lv_obj_set_style_local_text_color(gpu_percent_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
-    lv_obj_set_pos(gpu_percent_label, 218, 170);
-
-    gpu_bar = lv_bar_create(monitor_page, NULL);
-    styleMetricBar(gpu_bar, gpu_color, track_color);
-    lv_obj_set_pos(gpu_bar, 124, 185);
-
-    lv_obj_t *mem_title = lv_label_create(monitor_page, NULL);
-    lv_label_set_text(mem_title, "MEM");
-    lv_obj_add_style(mem_title, LV_LABEL_PART_MAIN, &metric_title_font);
-    lv_obj_set_style_local_text_color(mem_title, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
-    lv_obj_set_pos(mem_title, 124, 199);
-
-    mem_value_label = lv_label_create(monitor_page, NULL);
-    lv_label_set_text(mem_value_label, "0");
-    lv_obj_add_style(mem_value_label, LV_LABEL_PART_MAIN, &metric_value_font);
-    lv_obj_set_style_local_text_color(mem_value_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
-    lv_label_set_long_mode(mem_value_label, LV_LABEL_LONG_CROP);
-    lv_obj_set_width(mem_value_label, 51);
-    lv_label_set_align(mem_value_label, LV_LABEL_ALIGN_RIGHT);
-    lv_obj_set_pos(mem_value_label, 167, 195);
-
-    mem_percent_label = lv_label_create(monitor_page, NULL);
-    lv_label_set_text(mem_percent_label, "%");
-    lv_obj_add_style(mem_percent_label, LV_LABEL_PART_MAIN, &metric_unit_font);
-    lv_obj_set_style_local_text_color(mem_percent_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
-    lv_obj_set_pos(mem_percent_label, 218, 201);
-
-    mem_bar = lv_bar_create(monitor_page, NULL);
-    styleMetricBar(mem_bar, mem_color, track_color);
-    lv_obj_set_pos(mem_bar, 124, 216);
-
-    // 下半屏左侧：简洁显示温度和 24 小时制北京时间。
-    lv_obj_t *info_panel = lv_obj_create(monitor_page, NULL);
-    lv_obj_clean_style_list(info_panel, LV_OBJ_PART_MAIN);
-    lv_obj_set_style_local_bg_opa(info_panel, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_OPA_100);
-    lv_obj_set_style_local_bg_color(info_panel, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, cont_color);
-    lv_obj_set_style_local_border_width(info_panel, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, 0);
-    lv_obj_set_style_local_radius(info_panel, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, 24);
-    lv_obj_set_size(info_panel, 110, 105);
-    lv_obj_set_pos(info_panel, 5, 128);
-
-    lv_obj_t *info_divider = lv_obj_create(monitor_page, NULL);
-    lv_obj_clean_style_list(info_divider, LV_OBJ_PART_MAIN);
-    lv_obj_set_style_local_bg_opa(info_divider, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_OPA_40);
-    lv_obj_set_style_local_bg_color(info_divider, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, speed_label_color);
-    lv_obj_set_style_local_border_width(info_divider, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, 0);
-    lv_obj_set_style_local_radius(info_divider, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, 0);
-    lv_obj_set_size(info_divider, 110, 1);
-    lv_obj_set_pos(info_divider, 5, 166);
-
-    static lv_style_t time_font;
-    lv_style_init(&time_font);
-    lv_style_set_text_font(&time_font, LV_STATE_DEFAULT, &lv_font_montserrat_46);
-    lv_style_set_text_letter_space(&time_font, LV_STATE_DEFAULT, -1);
-
-    static lv_style_t uptime_font;
-    lv_style_init(&uptime_font);
-    lv_style_set_text_font(&uptime_font, LV_STATE_DEFAULT, &lv_font_montserrat_16);
-
-    static lv_style_t temperature_value_font;
-    lv_style_init(&temperature_value_font);
-    lv_style_set_text_font(&temperature_value_font, LV_STATE_DEFAULT, &lv_font_montserrat_22);
-
-    uptime_value_label = lv_label_create(monitor_page, NULL);
-    lv_label_set_text(uptime_value_label, "--");
-    lv_obj_add_style(uptime_value_label, LV_LABEL_PART_MAIN, &metric_value_font);
-    lv_obj_set_style_local_text_color(uptime_value_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
-    lv_label_set_long_mode(uptime_value_label, LV_LABEL_LONG_CROP);
-    lv_obj_set_width(uptime_value_label, 43);
-    lv_label_set_align(uptime_value_label, LV_LABEL_ALIGN_RIGHT);
-    lv_obj_set_pos(uptime_value_label, 7, 144);
-
-    uptime_unit_label = lv_label_create(monitor_page, NULL);
-    lv_label_set_text(uptime_unit_label, "D");
-    lv_obj_add_style(uptime_unit_label, LV_LABEL_PART_MAIN, &uptime_font);
-    lv_obj_set_style_local_text_color(uptime_unit_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, speed_label_color);
-    lv_obj_set_pos(uptime_unit_label, 50, 152);
-
-    temp_value_label = lv_label_create(monitor_page, NULL);
-    lv_label_set_text(temp_value_label, "--");
-    lv_obj_add_style(temp_value_label, LV_LABEL_PART_MAIN, &temperature_value_font);
-    lv_obj_set_style_local_text_color(temp_value_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
-    lv_label_set_long_mode(temp_value_label, LV_LABEL_LONG_CROP);
-    lv_obj_set_width(temp_value_label, 35);
-    lv_label_set_align(temp_value_label, LV_LABEL_ALIGN_RIGHT);
-    lv_obj_set_pos(temp_value_label, 59, 143);
-
-    temp_unit_label = lv_label_create(monitor_page, NULL);
-    lv_label_set_text(temp_unit_label, "°C");
-    lv_obj_add_style(temp_unit_label, LV_LABEL_PART_MAIN, &metric_unit_font);
-    lv_obj_set_style_local_text_color(temp_unit_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
-    lv_obj_set_pos(temp_unit_label, 95, 152);
+    date_label = lv_label_create(monitor_page, NULL);
+    lv_label_set_text(date_label, "-- --");
+    lv_obj_set_style_local_text_font(date_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
+    lv_obj_set_style_local_text_color(date_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
+    lv_label_set_align(date_label, LV_LABEL_ALIGN_CENTER);
+    lv_obj_set_size(date_label, 42, 15);
+    lv_obj_set_pos(date_label, 5, 158);
 
     time_label = lv_label_create(monitor_page, NULL);
-    lv_label_set_text(time_label, "00:00");
-    lv_obj_add_style(time_label, LV_LABEL_PART_MAIN, &time_font);
+    lv_label_set_text(time_label, "--:--:--");
+    lv_obj_set_style_local_text_font(time_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_42);
+    lv_obj_set_style_local_text_letter_space(time_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, -2);
     lv_obj_set_style_local_text_color(time_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
-    lv_label_set_recolor(time_label, true);
-    lv_label_set_long_mode(time_label, LV_LABEL_LONG_CROP);
-    lv_obj_set_width(time_label, 110);
     lv_label_set_align(time_label, LV_LABEL_ALIGN_CENTER);
-    lv_obj_set_pos(time_label, 5, 182);
+    lv_label_set_long_mode(time_label, LV_LABEL_LONG_CROP);
+    lv_obj_set_size(time_label, 182, 46);
+    lv_obj_set_pos(time_label, 53, 135);
 
-    lv_task_create(task_cb, 1000, LV_TASK_PRIO_MID, &test_data);
+    createMetric("CPU", 5, lv_color_hex(0xd74747), cpu_value_label, cpu_bar);
+    createMetric("GPU", 84, blue, gpu_value_label, gpu_bar);
+    createMetric("MEM", 163, green, mem_value_label, mem_bar);
+
+    lv_task_create(task_cb, 1000, LV_TASK_PRIO_MID, NULL);
+    lv_task_create(net_task_cb, NET_SAMPLE_INTERVAL_MS, LV_TASK_PRIO_HIGH, NULL);
     lv_task_create(clock_task_cb, 1000, LV_TASK_PRIO_MID, NULL);
+    lv_task_create(carousel_task_cb, 5000, LV_TASK_PRIO_LOW, NULL);
 }
 
 void loop()

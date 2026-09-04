@@ -2,7 +2,7 @@
 
 ![Router Monitor for FNOS NAS 项目封面](images/project-cover.png)
 
-一台基于 ESP8266 和 240 × 240 彩屏的 NAS 桌面监控小电视。设备每秒从 NAS 上的轻量 Docker API 获取数据，显示网络上传/下载趋势、CPU/GPU/内存占用、CPU 温度、NAS 运行时间和北京时间。
+一台基于 ESP8266 和 240 × 240 彩屏的 NAS 桌面监控小电视。设备每秒获取完整 NAS 状态，同时每 200 毫秒获取轻量网络计数，显示网络与硬盘读写速率、CPU/GPU/内存占用、时间及四页轮播信息。
 
 本项目基于 [404SynapseNotFound/routermonitor](https://github.com/404SynapseNotFound/routermonitor) 修改，数据源由 Netdata 改为随仓库提供的 NAS 状态服务，并增加了网页配网、Token 鉴权、夜间亮度和故障自动恢复。
 
@@ -14,11 +14,13 @@
 
 ![Router Monitor 功能亮点](images/feature-overview.png)
 
-- 每 1 秒刷新 CPU、Intel GPU、内存、温度及网络速率
-- 红色上传、蓝色下载折线和方向图标
-- 24 小时制北京时间，冒号闪烁
-- NAS 运行天数和自适应长数字显示
-- 温度分级配色：低于 60°C 为绿色，60–68°C 为白色，高于 68°C 为红色
+- `/status` 每 1 秒刷新 CPU、GPU、内存、硬盘读写、温度、容量、运行时间和近 24 小时统计
+- `/net` 每 200 毫秒更新红色上传、蓝色下载折线，实时网速数字约每 1 秒更新；请求失败后每 1 秒重试，成功即恢复
+- 实时网速和 `HH:MM:SS` 使用 42px 大字，保留 5px 真黑边
+- 硬盘读写速率每 1 秒刷新
+- 近 24 小时流量、开机时间、CPU/最高硬盘温度、总容量/已用容量/占用率每 5 秒轮播
+- NAS 每 5 秒独立采样并持久保存流量，屏幕断电不影响采集
+- 时间按 UTC+8 显示，附星期和日期，屏幕不显示时区字样
 - 首次启动 AP 配网，之后可通过设备局域网 IP 修改配置
 - Wi-Fi、NAS 地址和 Token 只保存在设备 LittleFS，不写入固件源码
 - 夜间自动降低亮度
@@ -42,7 +44,7 @@
 
 | PlatformIO 环境 | 屏幕控制器 | CS | SPI 时钟 | 验证状态 |
 | --- | --- | --- | --- | --- |
-| `nodemcuv2`（默认） | ST7789，240 × 240 | 无，`-1` | 40 MHz | SD2 实机已点亮，NAS 数据通过串口验证 |
+| `nodemcuv2`（默认） | ST7789，240 × 240 | 无，`-1` | 40 MHz | 完整固件已实机烧录，180 秒 5Hz/1Hz 稳定性验证通过 |
 | `nodemcuv2_ili9341` | ILI9341，240 × 240 界面区域 | D8 | 27 MHz | 保留原仓库配置，编译验证，未实机验收 |
 
 公共接线：DC=D3、RST=D4、背光=D1、MOSI=D7、SCLK=D5。ST7789 配置与旧 `sd2` 项目实际选中的 `Setup24_ST7789.h` 一致。ILI9341 的原生面板通常为 240 × 320，本项目保持原有 240 × 240 界面，不会自动拉伸。
@@ -63,7 +65,7 @@ cp .env.example .env
 
 编辑 `.env`：
 
-- `NAS_STATUS_IFACE`：默认 `auto`，会从宿主机默认路由自动识别；多网卡机器可手动指定
+- `NAS_STATUS_IFACE`：默认 `physical`，合计宿主机全部物理网卡；也可设为 `auto` 或具体接口名
 - `NAS_STATUS_PORT`：对局域网开放的端口，默认 `18199`
 - `NAS_STATUS_TOKEN`：长随机 Token，可用 `openssl rand -hex 32` 生成
 
@@ -106,7 +108,23 @@ pio run -e nodemcuv2 -e nodemcuv2_ili9341
 
 不指定 `-e` 时默认使用 ST7789。两种环境分别输出到 `.pio/build/nodemcuv2/` 和 `.pio/build/nodemcuv2_ili9341/`，共用相同的 LittleFS 配置布局；切换程序固件不需要重新填写 Wi-Fi 和 NAS 参数。
 
-默认调试串口和烧录速率为 115200（当前 CH340 设备已验证稳定）。界面使用 LVGL 内置 Montserrat 16/22/46 字体及上传/下载图标，无需额外字体文件。22px 字体同时用于温度和运行时间，显示缓冲为 5 行，以减少 RAM 占用。启用 ESP8266 Core 的 `NON32XFER_HANDLER`，支持 LVGL 对 Flash 字形的字节读取，避免 Exception (3)。
+默认调试串口和烧录速率为 115200（当前 CH340 设备已验证稳定）。界面只启用 LVGL 内置 Montserrat 12/22/42 字体及上传/下载图标，无需额外字体文件。显示缓冲为 5 行，以减少 RAM 占用。启用 ESP8266 Core 的 `NON32XFER_HANDLER`，支持 LVGL 对 Flash 字形的字节读取，避免 Exception (3)。
+
+### 240 × 240 主屏布局
+
+| 区域 | 像素范围 | 排版 |
+| --- | --- | --- |
+| 真黑边 | x/y=0–4、235–239 | 内容严格限制在 x/y=5–234 |
+| 实时上传/下载 | x=5–116、123–234，y=5–50 | 每列 112px；数字优先 42px，单位和图标 12px |
+| 网络趋势 | x=10，y=51，220 × 20 | 红色上传、蓝色下载，每 200ms 更新，显示近 10 秒 |
+| 硬盘读/写 | x=5–116、123–234，y=71–94 | 数字 22px，单位和 R/W 图标 12px，每秒更新 |
+| 四页轮播 | x=5–234，y=95–134 | 标题 12px、数值 22px，每 5 秒翻页，按一至三列自适应 |
+| 日期与时间 | x=5–234，y=135–181 | 左侧星期/日期 12px；`HH:MM:SS` 42px、字间距 -2px |
+| CPU / GPU / MEM | x=5–234，y=183–230 | 三列各 72px；百分比 22px、标题 12px、3px 进度条 |
+
+网速按实际字体宽度排版，长数字自动退到 22px；流量与速率使用十进制单位（1 GB = 1000 MB）。全部 86400 个 `HH:MM:SS` 组合在 42px 字体下不超过 182px。可运行 `python3 tests/check_layout.py` 检查真实字体字宽、5px 边框和流量格式化边界；先编译一次以安装 LVGL 字体源码。
+
+流量页的标题会按已有覆盖时长显示 `UP 12M`、`DOWN 3H`，采满一天后显示 `UP 24H`、`DOWN 24H`，不会补造部署前的历史。采样中断、旧版 API 或 NAS 离线时未知值显示 `--`。默认统计全部物理网卡，包含经过网线的局域网传输、广播和协议开销，并非运营商账单流量；OVS、Docker、VPN、TUN 和回环等虚拟接口不会重复相加。SQLite 保存在 Docker 命名卷中，容器重启保留数据；采样间隔 5 秒，窗口边界按采样区间比例估算。
 
 ## 3. 首次配网
 
@@ -123,9 +141,11 @@ pio run -e nodemcuv2 -e nodemcuv2_ili9341
 ## 数据与兼容性
 
 - CPU、内存、网络和运行时间来自宿主机只读挂载的 `/proc`、`/sys`
-- 网卡会从默认路由自动识别，兼容常见物理网卡、Linux bridge、bond 和 OVS 接口
+- 默认合计所有物理网卡；也可选择默认路由或明确指定 bridge、bond、OVS 等逻辑接口
+- 硬盘读写速率来自全部物理块设备的 Linux 计数器；RAID 会体现底层硬盘的实际 I/O
+- 总容量与已用容量来自显式只读挂载的 `/vol1`、`/vol2`，并按文件系统去重
 - CPU 温度综合读取 thermal zone 与 hwmon，识别 Intel `coretemp`、AMD `k10temp/zenpower` 及常见 ARM CPU thermal
-- SATA/NVMe 温度在内核提供 `drivetemp` 或 `nvme` hwmon 时选取最高值
+- 最高硬盘温度合并内核 `drivetemp`/`nvme` hwmon 与 smartd 的新鲜 ATA 日志
 - GPU 使用率支持 Intel i915 debugfs 和 AMDGPU sysfs；NVIDIA 或未暴露指标的 GPU 稳定降级为 0%
 - 固件使用流式 JSON 过滤，避免在 ESP8266 内存中保存完整响应
 
@@ -135,7 +155,7 @@ pio run -e nodemcuv2 -e nodemcuv2_ili9341
 
 - `.env`、Token、固件二进制和 PlatformIO 缓存已被 `.gitignore` 排除
 - API 启动时强制要求 Token
-- Compose 仅只读挂载系统指标目录，不挂载 Docker socket 或 NAS 数据卷
+- Compose 仅只读挂载系统指标目录、smartd 日志和明确配置的 NAS 数据卷根目录，不挂载 Docker socket
 - HTTP Token 在网络中不是加密传输；不要将服务直接映射到互联网
 - 已经公开过的 Token 应立即轮换，仅从 Git 历史删除字符串并不等于撤销泄露
 
