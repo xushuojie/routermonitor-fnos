@@ -38,11 +38,16 @@
 
 ## 硬件
 
-- ESP8266 / NodeMCU v2
-- ILI9341 显示控制器，240 × 240 可视区域
-- 当前接线配置：CS=D8、DC=D3、RST=D4、背光=D1，SPI 使用开发板硬件 SPI 引脚
+两种配置都使用 ESP8266 / NodeMCU v2 和 4 MB Flash，界面为 240 × 240：
 
-不同批次的小电视可能采用不同屏幕或背光接线。烧录前请核对并按需修改 `include/TFT_eSPI_Setup.h`。夜间亮度功能是否可用取决于硬件的背光控制方式。
+| PlatformIO 环境 | 屏幕控制器 | CS | SPI 时钟 | 验证状态 |
+| --- | --- | --- | --- | --- |
+| `nodemcuv2`（默认） | ST7789，240 × 240 | 无，`-1` | 40 MHz | SD2 实机已点亮，NAS 数据通过串口验证 |
+| `nodemcuv2_ili9341` | ILI9341，240 × 240 界面区域 | D8 | 27 MHz | 保留原仓库配置，编译验证，未实机验收 |
+
+公共接线：DC=D3、RST=D4、背光=D1、MOSI=D7、SCLK=D5。ST7789 配置与旧 `sd2` 项目实际选中的 `Setup24_ST7789.h` 一致。ILI9341 的原生面板通常为 240 × 320，本项目保持原有 240 × 240 界面，不会自动拉伸。
+
+固件不自动识别屏幕，烧录时必须选择对应环境。不同批次可能使用其他接线，按需修改 `include/TFT_eSPI_Setup.h` 后先运行 `pio run -e nodemcuv2 -e nodemcuv2_ili9341 --target clean` 再编译，避免复用旧驱动缓存。两套默认背光均按 D1 低电平有效处理；其他背光电路需相应调整。
 
 ## 架构与部署
 
@@ -77,13 +82,31 @@ curl -H "Authorization: Bearer 你的Token" http://NAS局域网IP:18199/status
 
 安装 [Visual Studio Code](https://code.visualstudio.com/) 和 PlatformIO 扩展，打开仓库根目录。连接 ESP8266 后运行 PlatformIO 的 Upload；或使用命令行：
 
+默认 ST7789：
+
 ```bash
-pio run
-pio run --target upload
-pio device monitor
+pio run -e nodemcuv2
+pio run -e nodemcuv2 --target upload
+pio device monitor -e nodemcuv2
 ```
 
-默认串口和烧录速率为 921600。若设备不稳定，可在 `platformio.ini` 中降低 `upload_speed`。
+ILI9341：
+
+```bash
+pio run -e nodemcuv2_ili9341
+pio run -e nodemcuv2_ili9341 --target upload
+pio device monitor -e nodemcuv2_ili9341
+```
+
+仅验证两种配置能否编译（不烧录）：
+
+```bash
+pio run -e nodemcuv2 -e nodemcuv2_ili9341
+```
+
+不指定 `-e` 时默认使用 ST7789。两种环境分别输出到 `.pio/build/nodemcuv2/` 和 `.pio/build/nodemcuv2_ili9341/`，共用相同的 LittleFS 配置布局；切换程序固件不需要重新填写 Wi-Fi 和 NAS 参数。
+
+默认调试串口和烧录速率为 115200（当前 CH340 设备已验证稳定）。界面使用 LVGL 内置 Montserrat 16/22/46 字体及上传/下载图标，无需额外字体文件。22px 字体同时用于温度和运行时间，显示缓冲为 5 行，以减少 RAM 占用。启用 ESP8266 Core 的 `NON32XFER_HANDLER`，支持 LVGL 对 Flash 字形的字节读取，避免 Exception (3)。
 
 ## 3. 首次配网
 
@@ -92,6 +115,8 @@ pio device monitor
 3. 填写 Wi-Fi、NAS 局域网 IP、端口及与 `.env` 相同的 Token。
 4. 保存后设备自动重启。
 5. 联网后仍可通过设备的局域网 IP 打开 Router Monitor 配置页。
+
+亮度可在配置页调整：当前电路 PWM 数值越小越亮，0 最亮，255 关闭；默认白天 180、夜间 235，夜间时段为北京时间 23:00–07:00。
 
 配置页不会回显已保存的 Wi-Fi 密码或 Token。敏感配置保存在 ESP8266 的 LittleFS 中；转让设备前应擦除 Flash。
 

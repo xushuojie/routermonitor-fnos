@@ -10,14 +10,13 @@
 using namespace std;
 
 // extern lv_font_t my_font_name;
-LV_FONT_DECLARE(tencent_w7_16)
-LV_FONT_DECLARE(tencent_w7_22)
-LV_FONT_DECLARE(tencent_w7_24)
+LV_FONT_DECLARE(lv_font_montserrat_16)
+LV_FONT_DECLARE(lv_font_montserrat_22)
 LV_FONT_DECLARE(lv_font_montserrat_46)
 
 TFT_eSPI tft = TFT_eSPI(); /* TFT instance */
 static lv_disp_buf_t disp_buf;
-static lv_color_t buf[LV_HOR_RES_MAX * 10];
+static lv_color_t buf[LV_HOR_RES_MAX * 5];
 
 // 定义页面
 static lv_obj_t *login_page = NULL;
@@ -367,13 +366,13 @@ static void layoutCompactInfoRow()
     const bool compactLongUptime = uptimeDays >= 1000UL;
     const bool threeDigitUptime = uptimeDays >= 100UL;
     const lv_font_t *uptimeValueFont = compactLongUptime
-                                              ? &tencent_w7_16
-                                              : (threeDigitUptime ? &tencent_w7_22 : &tencent_w7_24);
+                                              ? &lv_font_montserrat_16
+                                              : (threeDigitUptime ? &lv_font_montserrat_22 : &lv_font_montserrat_22);
     const lv_coord_t uptimeValueY = compactLongUptime ? 146 : (threeDigitUptime ? 141 : 143);
     lv_obj_set_style_local_text_font(uptime_value_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, uptimeValueFont);
 
     const lv_coord_t valueWidth = labelTextWidth(uptime_value_label, uptimeValueFont);
-    const lv_coord_t unitWidth = labelTextWidth(uptime_unit_label, &tencent_w7_16);
+    const lv_coord_t unitWidth = labelTextWidth(uptime_unit_label, &lv_font_montserrat_16);
     const lv_coord_t unitGap = unitWidth > 0 ? 2 : 1;
     const lv_coord_t uptimeUnitX = 58 - unitWidth;
     lv_coord_t uptimeValueX = uptimeUnitX - unitGap - valueWidth;
@@ -385,8 +384,8 @@ static void layoutCompactInfoRow()
     lv_obj_set_pos(uptime_value_label, uptimeValueX, uptimeValueY);
     lv_obj_set_pos(uptime_unit_label, uptimeUnitX, 152);
 
-    const lv_coord_t tempWidth = labelTextWidth(temp_value_label, &tencent_w7_24);
-    const lv_coord_t tempUnitWidth = labelTextWidth(temp_unit_label, &tencent_w7_16);
+    const lv_coord_t tempWidth = labelTextWidth(temp_value_label, &lv_font_montserrat_22);
+    const lv_coord_t tempUnitWidth = labelTextWidth(temp_unit_label, &lv_font_montserrat_16);
     const lv_coord_t tempUnitX = 112 - tempUnitWidth;
     const lv_coord_t tempX = tempUnitX - tempWidth - 1;
     lv_obj_set_width(temp_value_label, tempWidth);
@@ -507,7 +506,7 @@ static void task_cb(lv_task_t *task)
 
 void setup()
 {
-    Serial.begin(921600); /* prepare for possible serial debug */
+    Serial.begin(115200); /* prepare for possible serial debug */
     srand((unsigned)time(NULL));
     loadDeviceConfig();
 
@@ -520,7 +519,7 @@ void setup()
     tft.begin();        /* TFT init */
     tft.setRotation(0); /* Landscape orientation */
 
-    lv_disp_buf_init(&disp_buf, buf, NULL, LV_HOR_RES_MAX * 10);
+    lv_disp_buf_init(&disp_buf, buf, NULL, LV_HOR_RES_MAX * 5);
 
     /*Initialize the display*/
     lv_disp_drv_t disp_drv;
@@ -568,18 +567,18 @@ void setup()
     // Upload & Download Symbol
     static lv_style_t iconfont;
     lv_style_init(&iconfont);
-    lv_style_set_text_font(&iconfont, LV_STATE_DEFAULT, &iconfont_symbol);
+    lv_style_set_text_font(&iconfont, LV_STATE_DEFAULT, &lv_font_montserrat_16);
 
     upload_label = lv_label_create(monitor_page, NULL);
     lv_obj_add_style(upload_label, LV_LABEL_PART_MAIN, &iconfont);
-    lv_label_set_text(upload_label, CUSTOM_SYMBOL_UPLOAD);
+    lv_label_set_text(upload_label, LV_SYMBOL_UPLOAD);
     lv_color_t speed_label_color = lv_color_hex(0x838a99);
     lv_obj_set_style_local_text_color(upload_label, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_RED);
     lv_obj_set_pos(upload_label, 10, 18);
 
     download_label = lv_label_create(monitor_page, NULL);
     lv_obj_add_style(download_label, LV_LABEL_PART_MAIN, &iconfont);
-    lv_label_set_text(download_label, CUSTOM_SYMBOL_DOWNLOAD);
+    lv_label_set_text(download_label, LV_SYMBOL_DOWNLOAD);
     speed_label_color = lv_color_hex(0x838a99);
     lv_obj_set_style_local_text_color(download_label, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, lv_color_hex(0x278fbd));
     lv_obj_set_pos(download_label, 120, 18);
@@ -587,8 +586,8 @@ void setup()
     // Upload & Download Speed Display
     static lv_style_t font_22;
     lv_style_init(&font_22);
-    // lv_style_set_text_font(&font_22, LV_STATE_DEFAULT, &lv_font_montserrat_24);
-    lv_style_set_text_font(&font_22, LV_STATE_DEFAULT, &tencent_w7_22);
+    // lv_style_set_text_font(&font_22, LV_STATE_DEFAULT, &lv_font_montserrat_22);
+    lv_style_set_text_font(&font_22, LV_STATE_DEFAULT, &lv_font_montserrat_22);
 
     up_speed_label = lv_label_create(monitor_page, NULL);
     lv_label_set_text(up_speed_label, "56.78");
@@ -642,15 +641,15 @@ void setup()
     // 下半屏右侧：三行紧凑指标，适配 240x240 像素屏幕。
     static lv_style_t metric_value_font;
     lv_style_init(&metric_value_font);
-    lv_style_set_text_font(&metric_value_font, LV_STATE_DEFAULT, &tencent_w7_22);
+    lv_style_set_text_font(&metric_value_font, LV_STATE_DEFAULT, &lv_font_montserrat_22);
 
     static lv_style_t metric_title_font;
     lv_style_init(&metric_title_font);
-    lv_style_set_text_font(&metric_title_font, LV_STATE_DEFAULT, &tencent_w7_16);
+    lv_style_set_text_font(&metric_title_font, LV_STATE_DEFAULT, &lv_font_montserrat_16);
 
     static lv_style_t metric_unit_font;
     lv_style_init(&metric_unit_font);
-    lv_style_set_text_font(&metric_unit_font, LV_STATE_DEFAULT, &tencent_w7_16);
+    lv_style_set_text_font(&metric_unit_font, LV_STATE_DEFAULT, &lv_font_montserrat_16);
 
     const lv_color_t cpu_color = lv_color_hex(0xd74747);
     const lv_color_t gpu_color = lv_color_hex(0x278fbd);
@@ -758,11 +757,11 @@ void setup()
 
     static lv_style_t uptime_font;
     lv_style_init(&uptime_font);
-    lv_style_set_text_font(&uptime_font, LV_STATE_DEFAULT, &tencent_w7_16);
+    lv_style_set_text_font(&uptime_font, LV_STATE_DEFAULT, &lv_font_montserrat_16);
 
     static lv_style_t temperature_value_font;
     lv_style_init(&temperature_value_font);
-    lv_style_set_text_font(&temperature_value_font, LV_STATE_DEFAULT, &tencent_w7_24);
+    lv_style_set_text_font(&temperature_value_font, LV_STATE_DEFAULT, &lv_font_montserrat_22);
 
     uptime_value_label = lv_label_create(monitor_page, NULL);
     lv_label_set_text(uptime_value_label, "--");
