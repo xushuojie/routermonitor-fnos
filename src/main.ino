@@ -42,9 +42,25 @@ static lv_obj_t *disk_read_unit;
 static lv_obj_t *disk_write_label;
 static lv_obj_t *disk_write_value;
 static lv_obj_t *disk_write_unit;
+static lv_obj_t *carousel_viewport;
+static lv_obj_t *carousel_layer;
 static lv_obj_t *carousel_title[3];
 static lv_obj_t *carousel_value[3];
+static lv_obj_t *carousel_unit[2];
+static lv_obj_t *carousel_arrow[2];
+static lv_obj_t *carousel_dots[4];
+static lv_point_t disk_read_points[9] = {
+    {1, 15}, {1, 1}, {9, 1}, {13, 4}, {13, 7}, {9, 9}, {1, 9}, {9, 9}, {14, 15},
+};
+static lv_point_t disk_write_points[5] = {
+    {1, 1}, {4, 15}, {8, 7}, {12, 15}, {15, 1},
+};
+static lv_point_t carousel_arrow_points[2][5] = {
+    {{8, 15}, {8, 1}, {2, 7}, {8, 1}, {14, 7}},
+    {{8, 1}, {8, 15}, {2, 9}, {8, 15}, {14, 9}},
+};
 static uint8_t carouselPage = 0;
+static bool carouselAnimating = false;
 static bool nasOnline = false;
 
 static lv_chart_series_t *ser1;
@@ -192,39 +208,55 @@ bool refreshMonitorData()
     return false;
 }
 
-static lv_coord_t textWidth(const char *text, const lv_font_t *font)
+// Fixed boxes and fonts keep changing digits and units from moving their neighbors.
+static void layoutRateValue(lv_obj_t *icon, lv_obj_t *value, lv_obj_t *unit,
+                            lv_coord_t left, lv_coord_t baseline, bool prominent)
 {
-    return _lv_txt_get_width(text, strlen(text), font, 0, LV_TXT_FLAG_NONE);
+    const lv_font_t *valueFont = prominent ? &lv_font_montserrat_42 : &lv_font_montserrat_22;
+    const lv_coord_t iconWidth = prominent ? 12 : 16;
+    const lv_coord_t valueWidth = prominent ? 65 : 34;
+    const lv_coord_t unitWidth = 30;
+    const lv_coord_t iconX = left + (prominent ? 3 : 20);
+    const lv_coord_t valueX = left + (prominent ? 16 : 36);
+    const lv_coord_t unitX = left + (prominent ? 82 : 70);
+
+    if (prominent)
+    {
+        lv_obj_set_style_local_text_font(icon, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
+        lv_label_set_align(icon, LV_LABEL_ALIGN_CENTER);
+        lv_label_set_long_mode(icon, LV_LABEL_LONG_CROP);
+        lv_obj_set_size(icon, iconWidth, lv_font_montserrat_12.line_height);
+        lv_obj_set_pos(icon, iconX, baseline - (lv_font_montserrat_12.line_height - lv_font_montserrat_12.base_line));
+    }
+    else
+    {
+        lv_obj_set_pos(icon, iconX, baseline - 16);
+    }
+
+    lv_obj_set_style_local_text_font(value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, valueFont);
+    lv_label_set_align(value, LV_LABEL_ALIGN_CENTER);
+    lv_label_set_long_mode(value, LV_LABEL_LONG_CROP);
+    lv_obj_set_size(value, valueWidth, valueFont->line_height);
+    lv_obj_set_pos(value, valueX, baseline - (valueFont->line_height - valueFont->base_line));
+
+    lv_obj_set_style_local_text_font(unit, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
+    lv_label_set_align(unit, LV_LABEL_ALIGN_LEFT);
+    lv_label_set_long_mode(unit, LV_LABEL_LONG_CROP);
+    lv_obj_set_size(unit, unitWidth, lv_font_montserrat_12.line_height);
+    lv_obj_set_pos(unit, unitX, baseline - (lv_font_montserrat_12.line_height - lv_font_montserrat_12.base_line));
 }
 
-// Each direction owns 112px. Large network values fall back to 22px.
-static void updateTransferValue(lv_obj_t *icon, lv_obj_t *value, lv_obj_t *unit,
-                                double bytes, bool rate, lv_coord_t left, lv_coord_t baseline,
-                                const lv_font_t *preferredFont)
+static void updateRateValue(lv_obj_t *value, lv_obj_t *unit, double bytes)
 {
-    const TransferText text = formatTransfer(bytes, rate);
-    const lv_font_t *font = preferredFont;
-    const lv_coord_t iconWidth = textWidth(lv_label_get_text(icon), &lv_font_montserrat_12);
-    const lv_coord_t unitWidth = textWidth(text.unit, &lv_font_montserrat_12);
-    if (iconWidth + textWidth(text.number, font) + unitWidth + 2 > 112)
-        font = &lv_font_montserrat_22;
-    const lv_coord_t valueWidth = textWidth(text.number, font);
-    const lv_coord_t x = left + (112 - iconWidth - valueWidth - unitWidth - 2) / 2;
-    lv_obj_set_style_local_text_font(value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, font);
+    const TransferText text = formatTransfer(bytes, true);
     lv_label_set_text(value, text.number);
-    lv_label_set_text(unit, text.unit);
-    lv_obj_set_pos(icon, x, baseline - (lv_font_montserrat_12.line_height - lv_font_montserrat_12.base_line));
-    lv_obj_set_pos(value, x + iconWidth + 1, baseline - (font->line_height - font->base_line));
-    lv_obj_set_pos(unit, x + iconWidth + valueWidth + 2,
-                   baseline - (lv_font_montserrat_12.line_height - lv_font_montserrat_12.base_line));
+    lv_label_set_text(unit, text.unit[0] ? text.unit : "B/s");
 }
 
 void updateNetworkInfoLabel()
 {
-    updateTransferValue(upload_label, up_speed_label, up_speed_unit_label,
-                        nasStatus.txBytesPerSecond, true, 5, 43, &lv_font_montserrat_42);
-    updateTransferValue(download_label, down_speed_label, down_speed_unit_label,
-                        nasStatus.rxBytesPerSecond, true, 123, 43, &lv_font_montserrat_42);
+    updateRateValue(up_speed_label, up_speed_unit_label, nasStatus.txBytesPerSecond);
+    updateRateValue(down_speed_label, down_speed_unit_label, nasStatus.rxBytesPerSecond);
 }
 
 static uint32_t chartRate(double bytesPerSecond)
@@ -350,142 +382,193 @@ static void net_task_cb(lv_task_t *task)
     }
 }
 
-static lv_coord_t carouselColumnWidth(uint8_t count)
+static void showCarouselLabel(lv_obj_t *label, const char *text, const lv_font_t *font,
+                              lv_color_t color, lv_coord_t x, lv_coord_t y,
+                              lv_coord_t width, lv_coord_t height, lv_label_align_t align)
 {
-    return count == 1 ? 230 : (count == 2 ? 112 : 72);
+    lv_obj_set_hidden(label, false);
+    lv_label_set_text(label, text);
+    lv_obj_set_style_local_text_font(label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, font);
+    lv_obj_set_style_local_text_color(label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, color);
+    lv_label_set_align(label, align);
+    lv_obj_set_size(label, width, height);
+    lv_obj_set_pos(label, x, y);
 }
 
-static lv_coord_t carouselColumnLeft(uint8_t count, uint8_t index)
+static void hideCarouselContent()
 {
-    if (count == 1)
-        return 5;
-    if (count == 2)
-        return index == 0 ? 5 : 123;
-    return index == 0 ? 5 : (index == 1 ? 84 : 163);
-}
-
-static void layoutCarousel(uint8_t count)
-{
-    const lv_coord_t width = carouselColumnWidth(count);
     for (uint8_t index = 0; index < 3; ++index)
     {
-        const bool hidden = index >= count;
-        lv_obj_set_hidden(carousel_title[index], hidden);
-        lv_obj_set_hidden(carousel_value[index], hidden);
-        if (hidden)
-            continue;
-        const lv_coord_t left = carouselColumnLeft(count, index);
-        lv_obj_set_size(carousel_title[index], width, 15);
-        lv_obj_set_pos(carousel_title[index], left, 95);
-        lv_obj_set_size(carousel_value[index], width, 24);
-        lv_obj_set_pos(carousel_value[index], left, 110);
+        lv_obj_set_hidden(carousel_title[index], true);
+        lv_obj_set_hidden(carousel_value[index], true);
+    }
+    for (uint8_t index = 0; index < 2; ++index)
+    {
+        lv_obj_set_hidden(carousel_unit[index], true);
+        lv_obj_set_hidden(carousel_arrow[index], true);
     }
 }
 
-static void setCarouselText(uint8_t index, const char *title, const char *value, lv_color_t color,
-                            lv_coord_t width)
-{
-    const lv_font_t *font = textWidth(value, &lv_font_montserrat_22) <= width
-                                ? &lv_font_montserrat_22
-                                : &lv_font_montserrat_12;
-    lv_label_set_text(carousel_title[index], title);
-    lv_label_set_text(carousel_value[index], value);
-    lv_obj_set_style_local_text_color(carousel_title[index], LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, color);
-    lv_obj_set_style_local_text_color(carousel_value[index], LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, color);
-    lv_obj_set_style_local_text_font(carousel_value[index], LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, font);
-}
-
-static void formatBytes(char *buffer, size_t size, double bytes)
+static void formatStorage(char *buffer, size_t size, double bytes)
 {
     const TransferText text = formatTransfer(bytes, false);
-    snprintf(buffer, size, "%s%s", text.number, text.unit);
+    if (!text.unit[0])
+        snprintf(buffer, size, "%s", text.number);
+    else if (text.unit[1] == '\0')
+        snprintf(buffer, size, "%s%s", text.number, text.unit);
+    else
+        snprintf(buffer, size, "%s%c", text.number, text.unit[0]);
 }
 
 static void renderCarousel()
 {
-    static const lv_color_t red = LV_COLOR_RED;
-    static const lv_color_t blue = lv_color_hex(0x278fbd);
-    static const lv_color_t green = lv_color_hex(0x20c864);
-    static const lv_color_t amber = lv_color_hex(0xedbd76);
+    static const lv_color_t primary = lv_color_hex(0xf6f8fa);
+    static const lv_color_t muted = lv_color_hex(0xb9cad3);
+    static const lv_color_t secondary = lv_color_hex(0x8fa8b2);
+    static const lv_color_t green = lv_color_hex(0x45dfaa);
     char first[20] = "--";
     char second[20] = "--";
     char third[20] = "--";
-    char firstTitle[20] = "UP 24H";
-    char secondTitle[20] = "DOWN 24H";
+    const char *firstUnit = "";
+    const char *secondUnit = "";
+    hideCarouselContent();
+    for (uint8_t index = 0; index < 4; ++index)
+        lv_obj_set_style_local_bg_color(carousel_dots[index], LV_OBJ_PART_MAIN, LV_STATE_DEFAULT,
+                                        index == carouselPage ? lv_color_hex(0xd7e1e6) : lv_color_hex(0x48616a));
 
     if (carouselPage == 0)
     {
-        layoutCarousel(2);
         if (nasOnline && nasStatus.trafficHistoryValid)
         {
-            formatBytes(first, sizeof(first), nasStatus.txBytes24h);
-            formatBytes(second, sizeof(second), nasStatus.rxBytes24h);
-            if (nasStatus.trafficCoverageSeconds < 3600)
-            {
-                snprintf(firstTitle, sizeof(firstTitle), "UP %luM", static_cast<unsigned long>(nasStatus.trafficCoverageSeconds / 60));
-                snprintf(secondTitle, sizeof(secondTitle), "DOWN %luM", static_cast<unsigned long>(nasStatus.trafficCoverageSeconds / 60));
-            }
-            else if (nasStatus.trafficCoverageSeconds < 86400)
-            {
-                snprintf(firstTitle, sizeof(firstTitle), "UP %luH", static_cast<unsigned long>(nasStatus.trafficCoverageSeconds / 3600));
-                snprintf(secondTitle, sizeof(secondTitle), "DOWN %luH", static_cast<unsigned long>(nasStatus.trafficCoverageSeconds / 3600));
-            }
+            const TransferText upload = formatTransfer(nasStatus.txBytes24h, false);
+            const TransferText download = formatTransfer(nasStatus.rxBytes24h, false);
+            snprintf(first, sizeof(first), "%s", upload.number);
+            snprintf(second, sizeof(second), "%s", download.number);
+            firstUnit = upload.unit;
+            secondUnit = download.unit;
         }
-        setCarouselText(0, firstTitle, first, red, 112);
-        setCarouselText(1, secondTitle, second, blue, 112);
+        showCarouselLabel(carousel_title[0], "LAST 24H", &lv_font_montserrat_12, muted,
+                          0, -1, 230, 15, LV_LABEL_ALIGN_CENTER);
+        for (uint8_t index = 0; index < 2; ++index)
+        {
+            const lv_coord_t left = index * 115;
+            lv_obj_set_hidden(carousel_arrow[index], false);
+            lv_obj_set_pos(carousel_arrow[index], left + 8, 15);
+            showCarouselLabel(carousel_value[index], index ? second : first, &lv_font_montserrat_22,
+                              primary, left + 26, 12, 60, 24, LV_LABEL_ALIGN_RIGHT);
+            showCarouselLabel(carousel_unit[index], index ? secondUnit : firstUnit,
+                              &lv_font_montserrat_12, muted, left + 88, 20, 20, 15, LV_LABEL_ALIGN_LEFT);
+        }
     }
     else if (carouselPage == 1)
     {
-        layoutCarousel(1);
+        unsigned long days = 0;
+        unsigned long hours = 0;
         if (nasOnline)
         {
-            if (nas_uptime_seconds >= 86400UL)
-                snprintf(first, sizeof(first), "%lu D", static_cast<unsigned long>(nas_uptime_seconds / 86400UL));
-            else if (nas_uptime_seconds >= 3600UL)
-                snprintf(first, sizeof(first), "%lu H", static_cast<unsigned long>(nas_uptime_seconds / 3600UL));
-            else
-                snprintf(first, sizeof(first), "%lu M", static_cast<unsigned long>(nas_uptime_seconds / 60UL));
+            days = nas_uptime_seconds / 86400UL;
+            hours = (nas_uptime_seconds / 3600UL) % 24UL;
+            snprintf(first, sizeof(first), "%lu", days);
+            snprintf(second, sizeof(second), "%lu", hours);
         }
-        setCarouselText(0, "UPTIME", first, LV_COLOR_WHITE, 230);
+        showCarouselLabel(carousel_title[0], "UPTIME", &lv_font_montserrat_12, muted,
+                          0, -1, 230, 15, LV_LABEL_ALIGN_CENTER);
+        showCarouselLabel(carousel_value[0], first, &lv_font_montserrat_22, primary,
+                          14, 12, 64, 24, LV_LABEL_ALIGN_RIGHT);
+        showCarouselLabel(carousel_unit[0], "D", &lv_font_montserrat_12, muted,
+                          80, 20, 10, 15, LV_LABEL_ALIGN_LEFT);
+        showCarouselLabel(carousel_value[1], second, &lv_font_montserrat_22, primary,
+                          145, 12, 48, 24, LV_LABEL_ALIGN_RIGHT);
+        showCarouselLabel(carousel_unit[1], "H", &lv_font_montserrat_12, muted,
+                          195, 20, 10, 15, LV_LABEL_ALIGN_LEFT);
     }
     else if (carouselPage == 2)
     {
-        layoutCarousel(2);
         if (nasOnline && nasStatus.cpuTemperature > 0)
-            snprintf(first, sizeof(first), "%.0f°C", nasStatus.cpuTemperature);
+            snprintf(first, sizeof(first), "%.0f", nasStatus.cpuTemperature);
         if (nasOnline && nasStatus.diskTemperature > 0)
-            snprintf(second, sizeof(second), "%.0f°C", nasStatus.diskTemperature);
-        setCarouselText(0, "CPU TEMP", first, green, 112);
-        setCarouselText(1, "DISK MAX", second, amber, 112);
+            snprintf(second, sizeof(second), "%.0f", nasStatus.diskTemperature);
+        showCarouselLabel(carousel_title[0], "CPU", &lv_font_montserrat_12, secondary,
+                          14, 20, 28, 15, LV_LABEL_ALIGN_RIGHT);
+        showCarouselLabel(carousel_value[0], first, &lv_font_montserrat_22, green,
+                          45, 12, 38, 24, LV_LABEL_ALIGN_CENTER);
+        showCarouselLabel(carousel_unit[0], "°C", &lv_font_montserrat_12, muted,
+                          86, 20, 14, 15, LV_LABEL_ALIGN_LEFT);
+        showCarouselLabel(carousel_title[1], "DISK MAX", &lv_font_montserrat_12, secondary,
+                          115, 20, 60, 15, LV_LABEL_ALIGN_RIGHT);
+        showCarouselLabel(carousel_value[1], second, &lv_font_montserrat_22, green,
+                          176, 12, 38, 24, LV_LABEL_ALIGN_CENTER);
+        showCarouselLabel(carousel_unit[1], "°C", &lv_font_montserrat_12, muted,
+                          215, 20, 14, 15, LV_LABEL_ALIGN_LEFT);
     }
     else
     {
-        layoutCarousel(3);
         if (nasOnline && nasStatus.storageValid)
         {
-            formatBytes(first, sizeof(first), nasStatus.storageTotalBytes);
-            formatBytes(second, sizeof(second), nasStatus.storageUsedBytes);
+            formatStorage(first, sizeof(first), nasStatus.storageTotalBytes);
+            formatStorage(second, sizeof(second), nasStatus.storageUsedBytes);
             snprintf(third, sizeof(third), "%.0f%%", nasStatus.storagePercent);
         }
-        setCarouselText(0, "TOTAL", first, LV_COLOR_WHITE, 72);
-        setCarouselText(1, "USED", second, amber, 72);
-        setCarouselText(2, "USE", third, green, 72);
+        static const char *titles[] = {"TOTAL", "USED", "USAGE"};
+        const char *values[] = {first, second, third};
+        static const lv_coord_t left[] = {0, 77, 153};
+        static const lv_coord_t width[] = {77, 76, 77};
+        for (uint8_t index = 0; index < 3; ++index)
+        {
+            showCarouselLabel(carousel_title[index], titles[index], &lv_font_montserrat_12, secondary,
+                              left[index], 0, width[index], 15, LV_LABEL_ALIGN_CENTER);
+            showCarouselLabel(carousel_value[index], values[index], &lv_font_montserrat_22,
+                              index == 2 ? green : primary, left[index], 12, width[index], 24,
+                              LV_LABEL_ALIGN_CENTER);
+        }
     }
 }
 
 static void updateDiskIo(bool online)
 {
     const bool valid = online && nasStatus.diskIoValid;
-    updateTransferValue(disk_read_label, disk_read_value, disk_read_unit,
-                        valid ? nasStatus.diskReadBytesPerSecond : -1, true, 5, 91, &lv_font_montserrat_22);
-    updateTransferValue(disk_write_label, disk_write_value, disk_write_unit,
-                        valid ? nasStatus.diskWriteBytesPerSecond : -1, true, 123, 91, &lv_font_montserrat_22);
+    updateRateValue(disk_read_value, disk_read_unit,
+                    valid ? nasStatus.diskReadBytesPerSecond : -1);
+    updateRateValue(disk_write_value, disk_write_unit,
+                    valid ? nasStatus.diskWriteBytesPerSecond : -1);
+}
+
+static void carouselEnterReady(lv_anim_t *animation)
+{
+    carouselAnimating = false;
+}
+
+static void carouselExitReady(lv_anim_t *animation)
+{
+    carouselPage = (carouselPage + 1) % 4;
+    renderCarousel();
+    Serial.printf("CAROUSEL page=%u heap=%u\r\n", carouselPage, ESP.getFreeHeap());
+    lv_obj_set_x(carousel_layer, 230);
+
+    lv_anim_t enter;
+    lv_anim_init(&enter);
+    lv_anim_set_var(&enter, carousel_layer);
+    lv_anim_set_exec_cb(&enter, (lv_anim_exec_xcb_t)lv_obj_set_x);
+    lv_anim_set_values(&enter, 230, 0);
+    lv_anim_set_time(&enter, 200);
+    lv_anim_set_ready_cb(&enter, carouselEnterReady);
+    lv_anim_start(&enter);
 }
 
 static void carousel_task_cb(lv_task_t *task)
 {
-    carouselPage = (carouselPage + 1) % 4;
-    renderCarousel();
+    if (carouselAnimating)
+        return;
+    carouselAnimating = true;
+
+    lv_anim_t exit;
+    lv_anim_init(&exit);
+    lv_anim_set_var(&exit, carousel_layer);
+    lv_anim_set_exec_cb(&exit, (lv_anim_exec_xcb_t)lv_obj_set_x);
+    lv_anim_set_values(&exit, 0, -230);
+    lv_anim_set_time(&exit, 200);
+    lv_anim_set_ready_cb(&exit, carouselExitReady);
+    lv_anim_start(&exit);
 }
 
 void styleMetricBar(lv_obj_t *bar, lv_color_t indicatorColor, lv_color_t trackColor)
@@ -495,8 +578,8 @@ void styleMetricBar(lv_obj_t *bar, lv_color_t indicatorColor, lv_color_t trackCo
     lv_obj_set_style_local_bg_color(bar, LV_BAR_PART_INDIC, LV_STATE_DEFAULT, indicatorColor);
     lv_obj_set_style_local_border_width(bar, LV_BAR_PART_BG, LV_STATE_DEFAULT, 0);
     lv_obj_set_style_local_border_width(bar, LV_BAR_PART_INDIC, LV_STATE_DEFAULT, 0);
-    lv_obj_set_style_local_radius(bar, LV_BAR_PART_BG, LV_STATE_DEFAULT, 5);
-    lv_obj_set_style_local_radius(bar, LV_BAR_PART_INDIC, LV_STATE_DEFAULT, 5);
+    lv_obj_set_style_local_radius(bar, LV_BAR_PART_BG, LV_STATE_DEFAULT, 0);
+    lv_obj_set_style_local_radius(bar, LV_BAR_PART_INDIC, LV_STATE_DEFAULT, 0);
 }
 
 static void createMetric(const char *titleText, lv_coord_t left, lv_color_t color,
@@ -505,23 +588,33 @@ static void createMetric(const char *titleText, lv_coord_t left, lv_color_t colo
     lv_obj_t *title = lv_label_create(monitor_page, NULL);
     lv_label_set_text(title, titleText);
     lv_obj_set_style_local_text_font(title, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
-    lv_obj_set_style_local_text_color(title, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
+    lv_obj_set_style_local_text_color(title, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, lv_color_hex(0xf6f8fa));
     lv_label_set_align(title, LV_LABEL_ALIGN_CENTER);
     lv_obj_set_size(title, 72, 15);
-    lv_obj_set_pos(title, left, 183);
+    lv_obj_set_pos(title, left, 184);
 
     value = lv_label_create(monitor_page, NULL);
     lv_label_set_text(value, "0%");
     lv_obj_set_style_local_text_font(value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_22);
-    lv_obj_set_style_local_text_color(value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
+    lv_obj_set_style_local_text_color(value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, lv_color_hex(0xf6f8fa));
     lv_label_set_align(value, LV_LABEL_ALIGN_CENTER);
     lv_label_set_long_mode(value, LV_LABEL_LONG_CROP);
     lv_obj_set_size(value, 72, 24);
-    lv_obj_set_pos(value, left, 199);
+    lv_obj_set_pos(value, left, 203);
 
     bar = lv_bar_create(monitor_page, NULL);
-    styleMetricBar(bar, color, lv_color_hex(0x1e3644));
-    lv_obj_set_pos(bar, left, 228);
+    styleMetricBar(bar, color, lv_color_hex(0x23414b));
+    lv_obj_set_pos(bar, left, 232);
+}
+
+static void createDivider(lv_coord_t x, lv_coord_t y, lv_coord_t width, lv_color_t color)
+{
+    lv_obj_t *divider = lv_obj_create(monitor_page, NULL);
+    lv_obj_clean_style_list(divider, LV_OBJ_PART_MAIN);
+    lv_obj_set_style_local_bg_opa(divider, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_OPA_100);
+    lv_obj_set_style_local_bg_color(divider, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, color);
+    lv_obj_set_size(divider, width, 1);
+    lv_obj_set_pos(divider, x, y);
 }
 
 static void updateNightMode(uint8_t hour)
@@ -682,27 +775,31 @@ void setup()
     lv_obj_set_style_local_bg_color(outer, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_BLACK);
     lv_obj_set_size(outer, 240, 240);
 
-    const lv_color_t contentColor = lv_color_hex(0x081418);
-    const lv_color_t mutedColor = lv_color_hex(0x838a99);
-    const lv_color_t blue = lv_color_hex(0x278fbd);
-    const lv_color_t green = lv_color_hex(0x20c864);
-    const lv_color_t amber = lv_color_hex(0xedbd76);
+    const lv_color_t contentColor = lv_color_hex(0x061315);
+    const lv_color_t primaryColor = lv_color_hex(0xf6f8fa);
+    const lv_color_t mutedColor = lv_color_hex(0xb9cad3);
+    const lv_color_t secondaryColor = lv_color_hex(0x8fa8b2);
+    const lv_color_t red = lv_color_hex(0xff6670);
+    const lv_color_t blue = lv_color_hex(0x55c7f3);
+    const lv_color_t green = lv_color_hex(0x45dfaa);
+    const lv_color_t amber = lv_color_hex(0xf4bd62);
 
     lv_obj_t *content = lv_obj_create(monitor_page, NULL);
     lv_obj_clean_style_list(content, LV_OBJ_PART_MAIN);
     lv_obj_set_style_local_bg_opa(content, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_OPA_100);
     lv_obj_set_style_local_bg_color(content, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, contentColor);
+    lv_obj_set_style_local_radius(content, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, 10);
     lv_obj_set_size(content, 230, 230);
     lv_obj_set_pos(content, 5, 5);
 
     upload_label = lv_label_create(monitor_page, NULL);
     lv_label_set_text(upload_label, LV_SYMBOL_UPLOAD);
     lv_obj_set_style_local_text_font(upload_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
-    lv_obj_set_style_local_text_color(upload_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_RED);
+    lv_obj_set_style_local_text_color(upload_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, red);
     up_speed_label = lv_label_create(monitor_page, NULL);
     lv_label_set_text(up_speed_label, "--");
     lv_obj_set_style_local_text_font(up_speed_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_42);
-    lv_obj_set_style_local_text_color(up_speed_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
+    lv_obj_set_style_local_text_color(up_speed_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, primaryColor);
     up_speed_unit_label = lv_label_create(monitor_page, NULL);
     lv_label_set_text(up_speed_unit_label, "");
     lv_obj_set_style_local_text_font(up_speed_unit_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
@@ -715,15 +812,17 @@ void setup()
     down_speed_label = lv_label_create(monitor_page, NULL);
     lv_label_set_text(down_speed_label, "--");
     lv_obj_set_style_local_text_font(down_speed_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_42);
-    lv_obj_set_style_local_text_color(down_speed_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
+    lv_obj_set_style_local_text_color(down_speed_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, primaryColor);
     down_speed_unit_label = lv_label_create(monitor_page, NULL);
     lv_label_set_text(down_speed_unit_label, "");
     lv_obj_set_style_local_text_font(down_speed_unit_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
     lv_obj_set_style_local_text_color(down_speed_unit_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, mutedColor);
+    layoutRateValue(upload_label, up_speed_label, up_speed_unit_label, 5, 43, true);
+    layoutRateValue(download_label, down_speed_label, down_speed_unit_label, 123, 43, true);
     updateNetworkInfoLabel();
 
     chart = lv_chart_create(monitor_page, NULL);
-    lv_obj_set_size(chart, 220, 20);
+    lv_obj_set_size(chart, 220, 18);
     lv_obj_set_pos(chart, 10, 51);
     lv_obj_set_style_local_pad_left(chart, LV_CHART_PART_BG, LV_STATE_DEFAULT, 0);
     lv_obj_set_style_local_pad_right(chart, LV_CHART_PART_BG, LV_STATE_DEFAULT, 0);
@@ -738,66 +837,106 @@ void setup()
     lv_chart_set_type(chart, LV_CHART_TYPE_LINE);
     lv_chart_set_range(chart, 0, 1000);
     lv_chart_set_point_count(chart, CHART_POINT_COUNT);
-    ser1 = lv_chart_add_series(chart, LV_COLOR_RED);
+    ser1 = lv_chart_add_series(chart, red);
     ser2 = lv_chart_add_series(chart, blue);
     lv_chart_init_points(chart, ser1, 0);
     lv_chart_init_points(chart, ser2, 0);
 
-    disk_read_label = lv_label_create(monitor_page, NULL);
-    lv_label_set_text(disk_read_label, "R");
-    lv_obj_set_style_local_text_font(disk_read_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
-    lv_obj_set_style_local_text_color(disk_read_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, green);
+    disk_read_label = lv_line_create(monitor_page, NULL);
+    lv_line_set_points(disk_read_label, disk_read_points, 9);
+    lv_obj_set_style_local_line_width(disk_read_label, LV_LINE_PART_MAIN, LV_STATE_DEFAULT, 2);
+    lv_obj_set_style_local_line_rounded(disk_read_label, LV_LINE_PART_MAIN, LV_STATE_DEFAULT, true);
+    lv_obj_set_style_local_line_color(disk_read_label, LV_LINE_PART_MAIN, LV_STATE_DEFAULT, green);
     disk_read_value = lv_label_create(monitor_page, NULL);
     lv_label_set_text(disk_read_value, "--");
     lv_obj_set_style_local_text_font(disk_read_value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_22);
-    lv_obj_set_style_local_text_color(disk_read_value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
+    lv_obj_set_style_local_text_color(disk_read_value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, primaryColor);
     disk_read_unit = lv_label_create(monitor_page, NULL);
     lv_label_set_text(disk_read_unit, "");
     lv_obj_set_style_local_text_font(disk_read_unit, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
     lv_obj_set_style_local_text_color(disk_read_unit, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, mutedColor);
 
-    disk_write_label = lv_label_create(monitor_page, NULL);
-    lv_label_set_text(disk_write_label, "W");
-    lv_obj_set_style_local_text_font(disk_write_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
-    lv_obj_set_style_local_text_color(disk_write_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, amber);
+    disk_write_label = lv_line_create(monitor_page, NULL);
+    lv_line_set_points(disk_write_label, disk_write_points, 5);
+    lv_obj_set_style_local_line_width(disk_write_label, LV_LINE_PART_MAIN, LV_STATE_DEFAULT, 2);
+    lv_obj_set_style_local_line_rounded(disk_write_label, LV_LINE_PART_MAIN, LV_STATE_DEFAULT, true);
+    lv_obj_set_style_local_line_color(disk_write_label, LV_LINE_PART_MAIN, LV_STATE_DEFAULT, amber);
     disk_write_value = lv_label_create(monitor_page, NULL);
     lv_label_set_text(disk_write_value, "--");
     lv_obj_set_style_local_text_font(disk_write_value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_22);
-    lv_obj_set_style_local_text_color(disk_write_value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
+    lv_obj_set_style_local_text_color(disk_write_value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, primaryColor);
     disk_write_unit = lv_label_create(monitor_page, NULL);
     lv_label_set_text(disk_write_unit, "");
     lv_obj_set_style_local_text_font(disk_write_unit, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
     lv_obj_set_style_local_text_color(disk_write_unit, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, mutedColor);
+    layoutRateValue(disk_read_label, disk_read_value, disk_read_unit, 5, 91, false);
+    layoutRateValue(disk_write_label, disk_write_value, disk_write_unit, 123, 91, false);
     updateDiskIo(false);
+
+    carousel_viewport = lv_obj_create(monitor_page, NULL);
+    lv_obj_clean_style_list(carousel_viewport, LV_OBJ_PART_MAIN);
+    lv_obj_set_style_local_bg_opa(carousel_viewport, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_OPA_TRANSP);
+    lv_obj_set_size(carousel_viewport, 230, 35);
+    lv_obj_set_pos(carousel_viewport, 5, 96);
+
+    carousel_layer = lv_obj_create(carousel_viewport, NULL);
+    lv_obj_clean_style_list(carousel_layer, LV_OBJ_PART_MAIN);
+    lv_obj_set_style_local_bg_opa(carousel_layer, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_OPA_TRANSP);
+    lv_obj_set_size(carousel_layer, 230, 35);
+    lv_obj_set_pos(carousel_layer, 0, 0);
 
     for (uint8_t index = 0; index < 3; ++index)
     {
-        carousel_title[index] = lv_label_create(monitor_page, NULL);
+        carousel_title[index] = lv_label_create(carousel_layer, NULL);
         lv_obj_set_style_local_text_font(carousel_title[index], LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
         lv_label_set_align(carousel_title[index], LV_LABEL_ALIGN_CENTER);
         lv_label_set_long_mode(carousel_title[index], LV_LABEL_LONG_CROP);
-        carousel_value[index] = lv_label_create(monitor_page, NULL);
+        carousel_value[index] = lv_label_create(carousel_layer, NULL);
         lv_obj_set_style_local_text_font(carousel_value[index], LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_22);
         lv_label_set_align(carousel_value[index], LV_LABEL_ALIGN_CENTER);
         lv_label_set_long_mode(carousel_value[index], LV_LABEL_LONG_CROP);
+    }
+
+    for (uint8_t index = 0; index < 2; ++index)
+    {
+        carousel_unit[index] = lv_label_create(carousel_layer, NULL);
+        lv_label_set_text(carousel_unit[index], "");
+        lv_label_set_long_mode(carousel_unit[index], LV_LABEL_LONG_CROP);
+
+        carousel_arrow[index] = lv_line_create(carousel_layer, NULL);
+        lv_line_set_points(carousel_arrow[index], carousel_arrow_points[index], 5);
+        lv_obj_set_style_local_line_width(carousel_arrow[index], LV_LINE_PART_MAIN, LV_STATE_DEFAULT, 2);
+        lv_obj_set_style_local_line_rounded(carousel_arrow[index], LV_LINE_PART_MAIN, LV_STATE_DEFAULT, true);
+        lv_obj_set_style_local_line_color(carousel_arrow[index], LV_LINE_PART_MAIN, LV_STATE_DEFAULT,
+                                          index == 0 ? red : blue);
+    }
+
+    for (uint8_t index = 0; index < 4; ++index)
+    {
+        carousel_dots[index] = lv_obj_create(monitor_page, NULL);
+        lv_obj_clean_style_list(carousel_dots[index], LV_OBJ_PART_MAIN);
+        lv_obj_set_style_local_bg_opa(carousel_dots[index], LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_OPA_100);
+        lv_obj_set_style_local_radius(carousel_dots[index], LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_RADIUS_CIRCLE);
+        lv_obj_set_size(carousel_dots[index], 3, 3);
+        lv_obj_set_pos(carousel_dots[index], 108 + index * 7, 132);
     }
     renderCarousel();
 
     weekday_label = lv_label_create(monitor_page, NULL);
     lv_label_set_text(weekday_label, "---");
     lv_obj_set_style_local_text_font(weekday_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
-    lv_obj_set_style_local_text_color(weekday_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, mutedColor);
+    lv_obj_set_style_local_text_color(weekday_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, secondaryColor);
     lv_label_set_align(weekday_label, LV_LABEL_ALIGN_CENTER);
-    lv_obj_set_size(weekday_label, 42, 15);
-    lv_obj_set_pos(weekday_label, 5, 141);
+    lv_obj_set_size(weekday_label, 46, 15);
+    lv_obj_set_pos(weekday_label, 5, 147);
 
     date_label = lv_label_create(monitor_page, NULL);
     lv_label_set_text(date_label, "-- --");
     lv_obj_set_style_local_text_font(date_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
-    lv_obj_set_style_local_text_color(date_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
+    lv_obj_set_style_local_text_color(date_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, secondaryColor);
     lv_label_set_align(date_label, LV_LABEL_ALIGN_CENTER);
-    lv_obj_set_size(date_label, 42, 15);
-    lv_obj_set_pos(date_label, 5, 158);
+    lv_obj_set_size(date_label, 46, 15);
+    lv_obj_set_pos(date_label, 5, 161);
 
     time_label = lv_label_create(monitor_page, NULL);
     lv_label_set_text(time_label, "--:--:--");
@@ -807,11 +946,16 @@ void setup()
     lv_label_set_align(time_label, LV_LABEL_ALIGN_CENTER);
     lv_label_set_long_mode(time_label, LV_LABEL_LONG_CROP);
     lv_obj_set_size(time_label, 182, 46);
-    lv_obj_set_pos(time_label, 53, 135);
+    lv_obj_set_pos(time_label, 53, 138);
 
-    createMetric("CPU", 5, lv_color_hex(0xd74747), cpu_value_label, cpu_bar);
+    createMetric("CPU", 5, red, cpu_value_label, cpu_bar);
     createMetric("GPU", 84, blue, gpu_value_label, gpu_bar);
     createMetric("MEM", 163, green, mem_value_label, mem_bar);
+
+    createDivider(10, 67, 220, lv_color_hex(0x23414b));
+    createDivider(5, 69, 230, lv_color_hex(0x173038));
+    createDivider(5, 95, 230, lv_color_hex(0x23414b));
+    createDivider(5, 136, 230, lv_color_hex(0x23414b));
 
     lv_task_create(task_cb, 1000, LV_TASK_PRIO_MID, NULL);
     lv_task_create(net_task_cb, NET_SAMPLE_INTERVAL_MS, LV_TASK_PRIO_HIGH, NULL);

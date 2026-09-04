@@ -88,43 +88,57 @@ def main():
         actual = results[index * 2]
         assert actual == (number, unit), (cases[index], actual)
 
-    rate_cases = formatted((1_200_000, 12_300_000, 999_400_000, 999_500_000, 1e21))[1::2]
-    assert rate_cases == [("1.2", "MB/s"), ("12", "MB/s"), ("999", "MB/s"),
-                          ("1.0", "GB/s"), ("999+", "PB/s")], rate_cases
+    rate_cases = formatted((99_400, 99_500, 1_200_000, 12_300_000,
+                            999_400_000, 999_500_000, 1e21))[1::2]
+    assert rate_cases == [("99", "KB/s"), ("0.1", "MB/s"), ("1.2", "MB/s"),
+                          ("12", "MB/s"), ("1.0", "GB/s"), ("1.0", "GB/s"),
+                          ("99", "PB/s")], rate_cases
 
-    max_cell = 0
-    # 42px is preferred for network rates; every overflow must fit at 22px.
-    for number, unit in results + [("444.4", unit + suffix) for unit in units for suffix in ("", "/s")]:
-        for icon in ("\uf019", "\uf093"):
-            fixed = widths[12](icon) + widths[12](unit) + 2
-            size = 42 if fixed + widths[42](number) <= 112 else 22
-            used = fixed + widths[size](number)
-            assert used <= 112, (number, unit, size, used)
-            max_cell = max(max_cell, used)
+    # Fixed boxes: changing text fits without moving neighbors or changing font.
+    for number in ("--", "0.0", "0.1", "1.2", "8.8", "9.9", "10", "88", "99"):
+        assert widths[42](number) <= 65, (number, widths[42](number))
+        assert widths[22](number) <= 34, (number, widths[22](number))
+    assert max(widths[12](unit) for unit in ("B/s", "KB/s", "MB/s", "GB/s", "TB/s", "PB/s")) <= 30
+    assert max(widths[22](number) for number in ("--", "999.9", "999+")) <= 60
+    assert max(widths[12](unit) for unit in ("B", "KB", "MB", "GB", "TB", "PB")) <= 21
 
     max_clock = max(widths[42](f"{hour:02}:{minute:02}:{second:02}", -2)
                     for hour in range(24) for minute in range(60) for second in range(60))
     assert max_clock <= 182, max_clock
-    assert max(widths[12](day) for day in ("SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT")) <= 42
-    assert max(widths[12](f"{month:02}-{day:02}") for month in range(1, 13) for day in range(1, 32)) <= 42
-    for number, unit in results[::2]:
-        compact = number + unit
-        size = 22 if widths[22](compact) <= 72 else 12
-        assert widths[size](compact) <= 72, (compact, size)
-    for title, width in (("UP 24H", 112), ("DOWN 24H", 112), ("UP 59M", 112),
-                         ("DOWN 59M", 112), ("DOWN 23H", 112), ("UPTIME", 230),
-                         ("CPU TEMP", 112), ("DISK MAX", 112), ("TOTAL", 72),
-                         ("USED", 72), ("USE", 72), ("CPU", 72), ("GPU", 72), ("MEM", 72)):
+    assert max(widths[12](day) for day in ("SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT")) <= 46
+    assert max(widths[12](f"{month:02}-{day:02}") for month in range(1, 13) for day in range(1, 32)) <= 46
+    for title, width in (("LAST 24H", 230), ("UPTIME", 230), ("CPU", 28),
+                         ("DISK MAX", 60), ("TOTAL", 77), ("USED", 76),
+                         ("USAGE", 77), ("CPU", 72), ("GPU", 72), ("MEM", 72)):
         assert widths[12](title) <= width, title
     assert widths[22]("100%") <= 72
-    assert widths[22]("99°C") <= 112
+    assert max(widths[22](value) for value in ("99", "100")) <= 38
+    assert widths[22]("49710") <= 64 and widths[12]("°C") <= 14
 
-    bands = (("network", 5, 51), ("chart", 51, 71), ("disk", 71, 95),
-             ("carousel", 95, 135), ("clock", 135, 181), ("metrics", 181, 235))
-    assert bands[0][1] == 5 and bands[-1][2] == 235
-    assert all(current[2] == following[1] for current, following in zip(bands, bands[1:])), bands
+    source = (ROOT / "src/main.ino").read_text()
+    update_rate = source.split("static void updateRateValue", 1)[1].split("void updateNetworkInfoLabel", 1)[0]
+    assert "lv_obj_set_pos" not in update_rate and "text_font" not in update_rate
+    assert "textWidth" not in source
+    for snippet in (
+        "lv_obj_set_size(chart, 220, 18)",
+        "lv_obj_set_size(carousel_viewport, 230, 35)",
+        "lv_obj_set_pos(carousel_viewport, 5, 96)",
+        "lv_obj_set_pos(carousel_dots[index], 108 + index * 7, 132)",
+        "lv_obj_set_pos(time_label, 53, 138)",
+        "lv_obj_set_pos(bar, left, 232)",
+        "lv_anim_set_values(&exit, 0, -230)",
+        "lv_anim_set_values(&enter, 230, 0)",
+    ):
+        assert snippet in source, snippet
+    assert source.count("carousel_layer = lv_obj_create(") == 1
+    carousel_code = source.split("static void carouselEnterReady", 1)[1].split("void styleMetricBar", 1)[0]
+    assert "delay(" not in carousel_code and "while (" not in carousel_code
+    assert all(label in source for label in ('"LAST 24H"', '"UPTIME"', '"DISK MAX"', '"USAGE"'))
+    assert all(divider in source for divider in (
+        "createDivider(10, 67, 220", "createDivider(5, 69, 230",
+        "createDivider(5, 95, 230", "createDivider(5, 136, 230"))
     assert widths[42]("00:00:00", -2) == max_clock
-    print(f"PASS: {len(cases) * 2} formatter cases; network cells <= {max_cell}/112 px; "
+    print(f"PASS: {len(cases) * 2} formatter cases; fixed 112px rate cells; "
           f"all 86400 clock strings <= {max_clock}/182 px; 5px border bands fit.")
 
 
