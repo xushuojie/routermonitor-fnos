@@ -8,6 +8,10 @@
 
 [GitHub Releases](https://github.com/xushuojie/routermonitor-fnos/releases/latest) 提供两种屏幕的预编译固件、Docker 服务端部署包及 `SHA256SUMS.txt` 校验文件。
 
+当前版本：[v1.0.1 · Wi-Fi 省电优化](https://github.com/xushuojie/routermonitor-fnos/releases/tag/v1.0.1)。相比 v1.0.0，固件同时启用 Modem-sleep 和主循环 `delay(1)`，保持原有亮度、布局和刷新目标。单台 ST7789 设备的现场功率计读数由约 0.64W 降至约 0.55W（约 14%），用户确认无明显卡顿；此收益不保证适用于其他设备。USB 断开导致计划中的 3 分钟连续串口检查未完成，ILI9341 仅编译验证。
+
+已有 v1.0.0 用户更新对应屏幕的程序固件即可；本次没有服务端功能变化，无需为省电改动重新部署 Docker。
+
 - `st7789.bin`：ST7789 240 × 240 小屏幕，对应默认 `nodemcuv2` 配置。
 - `ili9341.bin`：ILI9341 屏幕的 240 × 240 显示区域，对应 `nodemcuv2_ili9341`，仅编译验证。
 - `nas-docker.zip`：解压后进入 `nas-docker`，按部署说明配置 `.env` 并执行 `docker compose up -d --build`；这是部署源码包，不是预构建 Docker 镜像。
