@@ -10,9 +10,9 @@
 
 [GitHub Releases](https://github.com/xushuojie/routermonitor-fnos/releases/latest) 提供两种屏幕的预编译固件、Docker 服务端部署包及 `SHA256SUMS.txt` 校验文件。
 
-当前版本：[v1.0.1 · Wi-Fi 省电优化](https://github.com/xushuojie/routermonitor-fnos/releases/tag/v1.0.1)。相比 v1.0.0，固件同时启用 Modem-sleep 和主循环 `delay(1)`，保持原有亮度、布局和刷新目标。单台 ST7789 设备的现场功率计读数由约 0.64W 降至约 0.55W（约 14%），用户确认无明显卡顿；此收益不保证适用于其他设备。USB 断开导致计划中的 3 分钟连续串口检查未完成，ILI9341 仅编译验证。
+当前版本：[v1.0.2 · 数据源自动发现与显示优化](https://github.com/xushuojie/routermonitor-fnos/releases/tag/v1.0.2)。服务端自动发现物理网口和存储卷，使用隔离采集容器统计容量；固件底部 POWER、CPU、GPU、MEM 进度条由 3px 加粗至 5px，保留 v1.0.1 的 Wi-Fi 省电优化。
 
-v1.0.1 的省电改动只需更新固件。**下文的服务端自动发现功能已更新到 `main`，尚未包含在 v1.0.1 的 Docker 附件中**；需要该功能时请按快速部署拉取当前仓库并重建服务端，ESP 固件无需更新。
+升级服务端请使用本版完整 Docker 部署包（包含新增的 `storage-discovery` 服务），保留已有数据目录和认证配置，按[服务端说明](nas-docker/README.md)迁移；只替换 `api.py` 无法启用容量自动发现。更新对应屏幕固件即可获得加粗进度条。ILI9341 仅编译验证。
 
 - `st7789.bin`：ST7789 240 × 240 小屏幕，对应默认 `nodemcuv2` 配置。
 - `ili9341.bin`：ILI9341 屏幕的 240 × 240 显示区域，对应 `nodemcuv2_ili9341`，仅编译验证。
