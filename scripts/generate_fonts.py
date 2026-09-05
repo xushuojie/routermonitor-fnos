@@ -85,5 +85,6 @@ if __name__ == "__main__":
     content += make_font("monitor_clock_42", 42, "0123456789:-", 28)
     content += make_font("monitor_rate_42", 42, "0123456789.-", 21, .75)
     content += make_font("monitor_value_22", 22, "0123456789.-+%BKMGTP", 15)
+    content += make_font("monitor_metric_22", 22, "0123456789.-%", 11, .75)
     (ROOT / "src/DisplayFonts.c").write_text(content)
-    print("Generated three fixed digit subsets in src/DisplayFonts.c")
+    print("Generated four fixed digit subsets in src/DisplayFonts.c")

@@ -83,6 +83,17 @@ int main(int argc, char **argv) {
     nasStatus.storagePercent=65; nasStatus.storageValid=true;
     updateNetworkInfoLabel(); updateDiskIo(true);
     setLabelText(time_label, "13:42:36"); setLabelText(weekday_label, "FRI"); setLabelText(date_label, "09-05");
+    const double watts[]={0,17.5,35,48.8,99.94,99.95,100,999,-1};
+    const char *powerText[]={"0.0","17.5","35.0","48.8","99.9","100","100","999","--"};
+    const int fills[]={0,175,350,350,350,350,350,350,0};
+    for(int i=0;i<9;i++) {
+        nasStatus.powerWatts=watts[i]; updatePower();
+        if(strcmp(lv_label_get_text(power_value_label),powerText[i]) || lv_bar_get_value(power_bar)!=fills[i]) return 8;
+        if(lv_obj_get_x(power_value_label)<5 || lv_obj_get_x(power_unit_label)+lv_obj_get_width(power_unit_label)>58) return 9;
+    }
+    nasStatus.powerWatts=14.1; nasOnline=false; updatePower();
+    if(strcmp(lv_label_get_text(power_value_label),"--") || lv_bar_get_value(power_bar)) return 10;
+    nasOnline=true; updatePower();
     updateMetric(cpu_bar,cpu_value_label,23,true);
     updateMetric(gpu_bar,gpu_value_label,0,true);
     updateMetric(mem_bar,mem_value_label,48,true);
@@ -113,6 +124,10 @@ int main(int argc, char **argv) {
     for (int page=0;page<5;page++) {
         carouselPage=page % 4;
         if(page==4) {
+            nasStatus.powerWatts=99.9; updatePower();
+            updateMetric(cpu_bar,cpu_value_label,100,true);
+            updateMetric(gpu_bar,gpu_value_label,100,true);
+            updateMetric(mem_bar,mem_value_label,100,true);
             nasStatus.txBytesPerSecond=140000000; nasStatus.rxBytesPerSecond=99400000;
             nasStatus.txBytes24h=444400000000.; nasStatus.rxBytes24h=999900000000.;
             updateNetworkInfoLabel();

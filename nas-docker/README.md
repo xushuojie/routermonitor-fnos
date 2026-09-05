@@ -161,3 +161,12 @@ python3 -m unittest discover -s . -p 'test_*.py' -v
 Compose 只读挂载 `/proc`、`/sys`、debugfs、smartd 日志和 `/vol1`、`/vol2`，并启用只读根文件系统、移除 Linux capabilities、禁止权限提升；只将 `/data` 持久卷开放写入以保存流量历史。服务不需要 Docker socket，也不会读取容器列表。
 
 该 API 使用 HTTP Bearer Token，不提供 TLS。推荐只绑定在可信局域网；若需远程访问，请通过 WireGuard/Tailscale 等 VPN 或带 TLS 的反向代理，并设置防火墙访问控制。
+
+
+## UPS 功率
+
+只读挂载 `/run/nut:/host/nut:ro`，复用飞牛已经运行的 NUT 驱动。仅发送 `DUMPALL` 读取缓存，不重新占用 USB、不修改 NUT/断电保护配置、不开放 UPS 控制接口。默认要求恰好一个 `usbhid-ups-*` socket；多设备时用 `NAS_STATUS_UPS_SOCKET` 指定容器内路径。
+
+`/status` 新增 `ups: {watts, valid, source, status, alarm}`，展示投影只包含 `ups.watts`。优先使用驱动提供的 `ups.realpower` / `output.realpower`；仅已验证的 `WL W120` 直流型号允许用输出电压×电流计算瓦数，source 为 `dc_voltage_current`，其他无瓦数的型号返回不可用，避免将交流视在功率当作有功功率。原始告警保留，不把已知 W120 电池误报过滤成“保护正常”。
+
+读取结果缓存 2 秒，单次读取总时限 200ms、最大 32KiB；socket 断开、超时、DATASTALE、非有限数或异常数值返回 null，屏幕显示 `-- W`。网络 `/net` 采样路径独立。当前展示支持 0–999W，0–35W 为进度条量程，35W 不是危险阈值。

@@ -2,6 +2,11 @@
 """Small, dependency-free host metrics API for Router Monitor."""
 
 import argparse
+import glob
+import math
+import shlex
+import socket
+import stat
 import hmac
 import json
 import os
@@ -426,6 +431,61 @@ def gpu_sample():
     return "unavailable", 0.0, False
 
 
+def ups_status():
+    """Read the existing NUT driver cache only; never claim USB or send controls."""
+    invalid = {"watts": None, "valid": False, "source": "unavailable"}
+    configured = os.environ.get("NAS_STATUS_UPS_SOCKET", "")
+    try:
+        paths = [configured] if configured else [path for path in glob.glob("/host/nut/usbhid-ups-*")
+                                                if stat.S_ISSOCK(os.stat(path).st_mode)]
+    except OSError:
+        return invalid
+    if len(paths) != 1:
+        return invalid
+    try:
+        deadline = time.monotonic() + 0.2
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(0.2)
+            client.connect(paths[0])
+            client.sendall(b"DUMPALL\n")
+            data = b""
+            while b"DUMPDONE\n" not in data:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or len(data) >= 32768:
+                    return invalid
+                client.settimeout(remaining)
+                chunk = client.recv(min(4096, 32768 - len(data)))
+                if not chunk:
+                    return invalid
+                data += chunk
+        lines = data.decode("utf-8").splitlines()
+        if "DATAOK" not in lines or "DATASTALE" in lines:
+            return invalid
+        values = {}
+        for line in lines:
+            if line.startswith("SETINFO "):
+                parts = shlex.split(line)
+                if len(parts) == 3:
+                    values[parts[1]] = parts[2]
+        watts = values.get("ups.realpower", values.get("output.realpower"))
+        source = "reported"
+        if watts is None:
+            # Only this verified DC model may use V*A as watts; AC needs power factor.
+            if values.get("device.model") != "W120" or values.get("device.mfr") != "WL":
+                return invalid
+            voltage, current = float(values["output.voltage"]), float(values["output.current"])
+            if not (0 < voltage <= 60 and 0 <= current <= 100):
+                return invalid
+            watts, source = voltage * current, "dc_voltage_current"
+        watts = float(watts)
+        if not math.isfinite(watts) or not 0 <= watts <= 999:
+            return invalid
+        return {"watts": round(watts, 1), "valid": True, "source": source,
+                "status": values.get("ups.status", ""), "alarm": values.get("ups.alarm", "")}
+    except (OSError, ValueError, KeyError, UnicodeError):
+        return invalid
+
+
 class Metrics:
     def __init__(self, traffic_history):
         self.traffic_history = traffic_history
@@ -438,6 +498,8 @@ class Metrics:
         self.cached = None
         self.sampled_at = self.temperatures_at = self.storage_at = 0
         self.cached_temperatures = self.cached_storage = None
+        self.cached_ups = None
+        self.ups_at = 0
 
     def snapshot(self):
         now = time.monotonic()
@@ -506,6 +568,9 @@ class Metrics:
         if self.cached_storage is None or now - self.storage_at >= 30:
             self.cached_storage = storage_status()
             self.storage_at = now
+        if self.cached_ups is None or now - self.ups_at >= 2:
+            self.cached_ups = ups_status()
+            self.ups_at = now
         summary = {kind: next((sensor["temp"] for sensor in self.cached_temperatures
                                if sensor["type"] == kind), None) for kind in ("cpu", "disk")}
         self.cached = {
@@ -527,6 +592,7 @@ class Metrics:
                 "valid": current_disk is not None,
             },
             "storage": self.cached_storage,
+            "ups": self.cached_ups,
             "uptime": uptime_seconds(),
             "traffic_24h": self.traffic_history.snapshot(),
         }
@@ -567,6 +633,7 @@ def handler_factory(metrics, token):
                     "traffic_24h": ("rx_bytes", "tx_bytes", "coverage_seconds", "valid"),
                     "disk_io": ("read_speed", "write_speed", "valid"),
                     "storage": ("total", "used", "percent", "valid"),
+                    "ups": ("watts",),
                 }
                 snapshot = {**{key: {field: snapshot[key][field] for field in names}
                                for key, names in fields.items()},

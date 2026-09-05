@@ -10,6 +10,7 @@
 // extern lv_font_t my_font_name;
 LV_FONT_DECLARE(lv_font_montserrat_12)
 LV_FONT_DECLARE(monitor_value_22)
+LV_FONT_DECLARE(monitor_metric_22)
 LV_FONT_DECLARE(monitor_clock_42)
 LV_FONT_DECLARE(monitor_rate_42)
 
@@ -27,6 +28,9 @@ static lv_obj_t *up_speed_label;
 static lv_obj_t *up_speed_unit_label;
 static lv_obj_t *down_speed_label;
 static lv_obj_t *down_speed_unit_label;
+static lv_obj_t *power_bar;
+static lv_obj_t *power_value_label;
+static lv_obj_t *power_unit_label;
 static lv_obj_t *cpu_bar;
 static lv_obj_t *cpu_value_label;
 static lv_obj_t *gpu_bar;
@@ -617,7 +621,7 @@ static void carousel_task_cb(lv_task_t *task)
 
 void styleMetricBar(lv_obj_t *bar, lv_color_t indicatorColor, lv_color_t trackColor)
 {
-    lv_obj_set_size(bar, 72, 3);
+    lv_obj_set_size(bar, 53, 3);
     lv_obj_set_style_local_bg_color(bar, LV_BAR_PART_BG, LV_STATE_DEFAULT, trackColor);
     lv_obj_set_style_local_bg_color(bar, LV_BAR_PART_INDIC, LV_STATE_DEFAULT, indicatorColor);
     lv_obj_set_style_local_border_width(bar, LV_BAR_PART_BG, LV_STATE_DEFAULT, 0);
@@ -635,16 +639,16 @@ static void createMetric(const char *titleText, lv_coord_t left, lv_color_t colo
     lv_obj_set_style_local_text_color(title, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, lv_color_hex(0xdce4ea));
     lv_label_set_long_mode(title, LV_LABEL_LONG_CROP);
     lv_label_set_align(title, LV_LABEL_ALIGN_CENTER);
-    lv_obj_set_size(title, 72, 15);
+    lv_obj_set_size(title, 53, 15);
     lv_obj_set_pos(title, left, 184);
 
     value = lv_label_create(monitor_page, NULL);
     lv_label_set_text(value, "--");
-    lv_obj_set_style_local_text_font(value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &monitor_value_22);
+    lv_obj_set_style_local_text_font(value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &monitor_metric_22);
     lv_obj_set_style_local_text_color(value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, lv_color_hex(0xdce4ea));
     lv_label_set_align(value, LV_LABEL_ALIGN_CENTER);
     lv_label_set_long_mode(value, LV_LABEL_LONG_CROP);
-    lv_obj_set_size(value, 72, 24);
+    lv_obj_set_size(value, 53, 24);
     lv_obj_set_pos(value, left, 203);
 
     bar = lv_bar_create(monitor_page, NULL);
@@ -722,6 +726,28 @@ static void updateMetric(lv_obj_t *bar, lv_obj_t *label, double percentage, bool
     setLabelText(label, text);
 }
 
+static void updatePower()
+{
+    char text[8] = "--";
+    const double watts = nasStatus.powerWatts;
+    const bool valid = nasOnline && isfinite(watts) && watts >= 0 && watts <= 999;
+    if (valid)
+        snprintf(text, sizeof(text), watts < 99.95 ? "%.1f" : "%.0f", watts);
+    const int value = valid ? static_cast<int>(round(min(watts, 35.0) * 10)) : 0;
+    if (lv_bar_get_value(power_bar) != value)
+        lv_bar_set_value(power_bar, value, LV_ANIM_OFF);
+    if (strcmp(lv_label_get_text(power_value_label), text) != 0)
+    {
+        setLabelText(power_value_label, text);
+        lv_point_t size;
+        _lv_txt_get_size(&size, text, &monitor_metric_22, 0, 0, LV_COORD_MAX, LV_TXT_FLAG_NONE);
+        const lv_coord_t left = 5 + (53 - size.x - 15) / 2;
+        lv_obj_set_size(power_value_label, size.x, 24);
+        lv_obj_set_pos(power_value_label, left, 203);
+        lv_obj_set_pos(power_unit_label, left + size.x + 1, 211);
+    }
+}
+
 static void task_cb(lv_task_t *task)
 {
     static uint32_t lastSuccessAt = 0;
@@ -740,6 +766,7 @@ static void task_cb(lv_task_t *task)
     else
         nasOnline = false;
     updateDiskIo(nasOnline);
+    updatePower();
     if (!carouselAnimating)
         renderCarousel();
     updateMetric(cpu_bar, cpu_value_label, cpu_usage, nasOnline);
@@ -775,6 +802,7 @@ void setup()
     monitor_clock_42.get_glyph_bitmap = readDisplayGlyph;
     monitor_rate_42.get_glyph_bitmap = readDisplayGlyph;
     monitor_value_22.get_glyph_bitmap = readDisplayGlyph;
+    monitor_metric_22.get_glyph_bitmap = readDisplayGlyph;
 #endif
     lv_init();
 
@@ -981,9 +1009,17 @@ void setup()
     lv_obj_set_size(time_label, 182, 46);
     lv_obj_set_pos(time_label, 53, 138);
 
-    createMetric("CPU", 5, red, cpu_value_label, cpu_bar);
-    createMetric("GPU", 84, blue, gpu_value_label, gpu_bar);
-    createMetric("MEM", 163, green, mem_value_label, mem_bar);
+    createMetric("POWER", 5, lv_color_hex(0xb7a1ff), power_value_label, power_bar);
+    lv_bar_set_range(power_bar, 0, 350); // Tenths of a watt; 35W is a display ceiling.
+    power_unit_label = lv_label_create(monitor_page, NULL);
+    lv_label_set_text(power_unit_label, "W");
+    lv_obj_set_style_local_text_font(power_unit_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
+    lv_obj_set_style_local_text_color(power_unit_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, mutedColor);
+    setLabelText(power_value_label, "");
+    updatePower();
+    createMetric("CPU", 64, red, cpu_value_label, cpu_bar);
+    createMetric("GPU", 123, blue, gpu_value_label, gpu_bar);
+    createMetric("MEM", 182, green, mem_value_label, mem_bar);
 
     createDivider(10, 67, 220, lv_color_hex(0x304451));
     createDivider(5, 69, 230, lv_color_hex(0x304451));
@@ -1026,10 +1062,10 @@ static void reportDiagnostics()
                   (unsigned)memory.frag_pct, (unsigned long)maxLoopGapMs,
                   (unsigned long)animationFrames, (unsigned long)animationMaxGapMs,
                   (unsigned long)animationSlowFrames);
-    Serial.printf("STATE online=%u history=%u storage=%u rx24=%.0f tx24=%.0f cpu=%.1f temp=%.0f disk=%.0f\r\n",
+    Serial.printf("STATE online=%u history=%u storage=%u rx24=%.0f tx24=%.0f cpu=%.1f temp=%.0f disk=%.0f power=%.1f\r\n",
                   nasOnline, nasStatus.trafficHistoryValid, nasStatus.storageValid,
                   nasStatus.rxBytes24h, nasStatus.txBytes24h, nasStatus.cpuPercent,
-                  nasStatus.cpuTemperature, nasStatus.diskTemperature);
+                  nasStatus.cpuTemperature, nasStatus.diskTemperature, nasStatus.powerWatts);
     maxLoopGapMs = animationFrames = animationMaxGapMs = animationSlowFrames = 0;
 }
 

@@ -22,6 +22,7 @@ services:
       - /sys:/host/sys:ro
       - /sys/kernel/debug:/host/debug:ro
       - /var/lib/smartmontools:/host/smartmontools:ro
+      - /run/nut:/host/nut:ro
       - /vol1:/vol1:ro
       - /vol2:/vol2:ro
       - traffic-history:/data

@@ -19,6 +19,7 @@ extern "C"
 
 struct NasStatusSnapshot
 {
+    double powerWatts = -1;
     double cpuPercent = 0;
     double gpuPercent = 0;
     double memoryPercent = 0;
@@ -540,6 +541,7 @@ private:
             snapshot.memoryPercent < 0 || snapshot.memoryPercent > 100 ||
             !doc["uptime"].is<uint32_t>())
             return false;
+        snapshot.powerWatts = optionalNumber(doc["ups"]["watts"]);
         snapshot.uptimeSeconds = doc["uptime"].as<uint32_t>();
         snapshot.cpuTemperature = optionalNumber(doc["temperature_summary"]["cpu"]);
         snapshot.diskTemperature = optionalNumber(doc["temperature_summary"]["disk"]);

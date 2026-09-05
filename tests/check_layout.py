@@ -18,7 +18,7 @@ FONTS = ROOT / ".pio/libdeps/nodemcuv2/lv_arduino/src/src/lv_font"
 
 def font_width(size):
     if size != 12:
-        name = {22: "monitor_value_22", 42: "monitor_clock_42", "rate": "monitor_rate_42"}[size]
+        name = {22: "monitor_value_22", 42: "monitor_clock_42", "rate": "monitor_rate_42", "metric": "monitor_metric_22"}[size]
         source = (ROOT / "src/DisplayFonts.c").read_text()
         glyphs = source.split(name + "_glyphs[] =", 1)[1].split("};", 1)[0]
         advances = [int(n) for n in re.findall(r"\.adv_w = (\d+)", glyphs)]
@@ -124,7 +124,9 @@ def main():
                          ("DISK MAX", 60), ("TOTAL", 77), ("USED", 76),
                          ("USAGE", 77), ("CPU", 72), ("GPU", 72), ("MEM", 72)):
         assert widths[12](title) <= width, title
-    assert widths[22]("100%") <= 72
+    assert font_width("metric")("100%") <= 53
+    assert font_width("metric")("99.9") + 1 + widths[12]("W") <= 53
+    assert widths[12]("POWER") <= 53
     assert max(widths[22](value) for value in ("99", "100")) <= 45
     assert widths[22]("49710") <= 75 and widths[12]("°C") <= 14
 
