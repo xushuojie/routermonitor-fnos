@@ -1,18 +1,26 @@
 # Router Monitor for FNOS NAS
 
-![Router Monitor for FNOS NAS 项目封面](images/project-cover.png)
+**飞牛 / Linux NAS 网页控制台 + ESP8266 桌面监控屏**
+
+[快速部署](#1-部署-nas-服务) · [网页控制台](#打开-nas-网页控制台) · [屏幕与烧录](#2-编译和烧录固件) · [服务端完整说明](nas-docker/README.md)
+
+![NAS 网页控制台：实时数据概览](images/web-overview.png)
 
 一台基于 ESP8266 和 240 × 240 彩屏的 NAS 桌面监控小电视。设备通过 HTTP 长连接每秒获取 NAS 展示状态，同时每 200 毫秒获取共享网络采样，显示网络与硬盘读写速率、CPU/GPU/内存占用、时间及四页轮播信息。
 
 本项目基于 [404SynapseNotFound/routermonitor](https://github.com/404SynapseNotFound/routermonitor) 修改，数据源由 Netdata 改为随仓库提供的 NAS 状态服务，并增加了 NAS 网页控制台、设备网页配网、Token 鉴权、夜间亮度和故障自动恢复。
 
-### 实机照片
+### 屏幕预览
 
-![Router Monitor 实机效果](images/routermonitor.jpeg)
+以下由当前固件的实际 LVGL 界面渲染，使用示例数据；图片原始尺寸均为 240 × 240，不是实机照片。
+
+| 24 小时流量 | 开机时间 |
+| --- | --- |
+| ![流量页](images/screen-traffic.png) | ![开机时间页](images/screen-uptime.png) |
+| CPU / 硬盘温度 | 存储空间 |
+| ![温度页](images/screen-temperature.png) | ![容量页](images/screen-storage.png) |
 
 ## 功能
-
-![Router Monitor 功能亮点](images/feature-overview.png)
 
 - NAS 网页：实时概览、全量网卡发现、单卡/多卡统计、别名、拓扑校验、配置导入导出与管理员登录
 - `/status?display=1&v=2` 每 1 秒刷新 CPU、GPU、内存、硬盘读写和运行时间；温度每 5 秒、容量每 30 秒、滚动流量每 5 秒采样
@@ -54,13 +62,24 @@
 
 ## 架构与部署
 
-![Router Monitor 架构与部署](images/architecture-setup.png)
+```mermaid
+flowchart LR
+    NAS["NAS 内核计数与传感器"] --> Collector["Docker 共享采样"]
+    Collector --> API["HTTP API 与网页控制台"]
+    Collector --> History["SQLite 流量历史"]
+    Browser["浏览器：查看指标 / 选择网卡"] <--> API
+    API --> ESP["ESP8266：240 × 240 显示"]
+```
+
+网页和屏幕读取同一份采样快照。更改统计来源后，屏幕自动跟随，无需重新烧录。
 
 ## 1. 部署 NAS 服务
 
-NAS 需安装 Docker Compose。进入 `nas-docker` 后执行：
+NAS 需安装 Docker Compose。获取仓库后执行：
 
 ```bash
+git clone https://github.com/xushuojie/routermonitor-fnos.git
+cd routermonitor-fnos/nas-docker
 cp .env.example .env
 ```
 
@@ -69,6 +88,8 @@ cp .env.example .env
 - `NAS_STATUS_IFACE`：首次启动默认 `physical`，固定选择当时发现的物理网卡；以后通过网页选择单卡或多卡，新网卡不会自动加入
 - `NAS_STATUS_PORT`：对局域网开放的端口，默认 `18199`
 - `NAS_STATUS_TOKEN`：长随机 Token，可用 `openssl rand -hex 32` 生成
+
+按 NAS 的实际存储卷调整 `compose.yml` 中 `/vol1`、`/vol2` 的只读挂载，并同步修改 `NAS_STATUS_STORAGE_PATHS`。模板使用 host 网络，确认所选端口未被占用。
 
 启动并测试：
 
@@ -147,9 +168,10 @@ pio run -e nodemcuv2 -e nodemcuv2_ili9341
 
 POWER 使用淡紫色 `#B7A1FF`，进度条固定 0–35W，超过 35W 满格但继续显示真实读数；0–99.9W 保留一位小数，四舍五入到 100W 后显示整数，数据无效或离线显示 `-- W` 并清空条。功率为 UPS 输出端读数，WL W120 使用输出电压×电流计算，每 2 秒刷新；只有 UPS 单独给 NAS 供电时才对应整机直流输入功耗，不包含电源适配器损耗。
 
-![新界面实际 LVGL 渲染，示例数据](images/ui-optimized.png)
-
 轮播复用一个 230 × 35 内容层，旧页 200ms 缓入滑出、新页 200ms 缓出滑入；页点固定，移动期间保持内容不变，完成后显示最新快照。只在切页时设置布局，普通刷新只替换变化的文字和温度警示色。开机时间页居中显示 `7d 13h 24m`，数字 22px、单位 12px，小时/分钟补零且固定槽位；超过 999 天显示天和小时，离线显示 `--d --h --m`，分钟变化时更新文字。温度页采用上下对齐的标题与数值；容量页显示 `TOTAL/USED/USAGE`。数据过期时 CPU/GPU/MEM、硬盘和累计量统一显示 `--`，不保留看似正常的旧占用率。
+
+<details>
+<summary>开发、协议与验证记录</summary>
 
 故障注入验收可临时定义 `MONITOR_WIFI_RECOVERY_TEST`：只在该测试固件中延迟正确 Wi-Fi 凭据 20 秒，不修改已保存配置；交付固件不启用此宏。
 
@@ -174,6 +196,10 @@ python3 tests/render_ui.py /tmp/routermonitor-ui
 
 流量统计不会补造部署前的历史；默认合计物理网卡经过网线的局域网传输、广播与协议开销，虚拟网卡不重复累加。SQLite 每 5 秒持久采样，窗口边界按区间比例估算；升级保留旧区间，无法核实的迁移边界不补算。详见服务端说明。
 
+UPS 功率版本验收（2026-09-05）：14 项服务端测试、布局/功率边界渲染检查和双屏编译通过。ST7789 烧录后观察 45 秒，四页轮播正常，串口最后一次统计网络 164/164、状态 33/33 成功，无请求失败、异常或重启，功率有效。最低系统空闲堆 12976B，LVGL 池最低空闲 3304B；ILI9341 仅编译验证。
+
+</details>
+
 ## 3. 首次配网
 
 1. 小电视超过 15 秒无法连接已保存 Wi-Fi 时，会建立 `RouterMonitor-XXXXXX` 热点；屏幕和本地串口显示本次随机 AP 密码。
@@ -191,12 +217,12 @@ python3 tests/render_ui.py /tmp/routermonitor-ui
 ## 数据与兼容性
 
 - CPU、内存、网络和运行时间来自宿主机只读挂载的 `/proc`、`/sys`
-- 默认合计所有物理网卡；也可选择默认路由或明确指定 bridge、bond、OVS 等逻辑接口
+- 首次默认选择当时发现的物理网卡，之后以网页保存的固定接口集合为准；可单选逻辑接口，已知上下层重复统计会被拒绝
 - 硬盘读写速率来自全部物理块设备的 Linux 计数器；RAID 会体现底层硬盘的实际 I/O
 - 总容量与已用容量来自显式只读挂载的 `/vol1`、`/vol2`，并按文件系统去重
 - CPU 温度综合读取 thermal zone 与 hwmon，识别 Intel `coretemp`、AMD `k10temp/zenpower` 及常见 ARM CPU thermal
 - 最高硬盘温度合并内核 `drivetemp`/`nvme` hwmon 与 smartd 的新鲜 ATA 日志
-- GPU 使用率支持 Intel i915 debugfs 和 AMDGPU sysfs；NVIDIA 或未暴露指标的 GPU 稳定降级为 0%
+- GPU 使用率支持 Intel i915 debugfs 和 AMDGPU sysfs；NVIDIA 或未暴露指标的 GPU 标记为不可用，网页与 v2 固件显示 `--`
 - 固件使用流式 JSON 过滤，避免在 ESP8266 内存中保存完整响应
 
 飞牛 NAS 本质上运行 Linux，但不同机型使用的内核、CPU、GPU 和传感器驱动并不完全相同，因此无法承诺每台设备都具备全部指标。服务会保证 CPU、内存、网络和开机时间尽可能通用；温度和 GPU 属于硬件/驱动可选项，取不到时不会影响其他数据显示。
@@ -212,5 +238,3 @@ python3 tests/render_ui.py /tmp/routermonitor-ui
 ## 许可证与致谢
 
 本项目是 `404SynapseNotFound/routermonitor` 的衍生版本，继续使用 [GNU GPL v3](LICENSE)。界面字体及数字子集均派生自 LVGL 依赖中的 Montserrat 位图，不使用 Windows 系统字体。感谢原作者及 LVGL、TFT_eSPI、ArduinoJson、PlatformIO 等开源项目。
-
-UPS 功率版本验收（2026-09-05）：14 项服务端测试、布局/功率边界渲染检查和双屏编译通过。ST7789 烧录后观察 45 秒，四页轮播正常，串口最后一次统计网络 164/164、状态 33/33 成功，无请求失败、异常或重启，功率有效。最低系统空闲堆 12976B，LVGL 池最低空闲 3304B；ILI9341 仅编译验证。

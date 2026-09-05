@@ -24,6 +24,8 @@ curl -H "Authorization: Bearer $NAS_STATUS_TOKEN" http://127.0.0.1:18199/net
 
 ## 网页控制台
 
+![NAS 网页控制台：实时数据概览](../images/web-overview.png)
+
 打开 `http://NAS局域网IP:18199/`，使用独立管理员密码登录。未设置 `NAS_STATUS_ADMIN_PASSWORD` 时，首次启动自动生成密码并写入数据目录 `initial-admin-password.txt`（权限 600）；仓库模板读取命令：
 
 ```bash
