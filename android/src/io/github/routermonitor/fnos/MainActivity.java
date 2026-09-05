@@ -58,7 +58,7 @@ public final class MainActivity extends Activity {
         display.invalidate();
         if (SystemClock.elapsedRealtime() - lastLog >= 30000) {
             lastLog = SystemClock.elapsedRealtime();
-            Log.i("NasMonitor", "net=" + display.netSuccess + " status=" + display.statusSuccess + " failures=" + display.failures + " netAgeMs=" + display.netAge() + " statusAgeMs=" + display.statusAge() + " drawMaxUs=" + display.drawMaxUs);
+            Log.i("NasMonitor", "net=" + display.netSuccess + " status=" + display.statusSuccess + " failures=" + display.failures + " netAgeMs=" + display.netAge() + " statusAgeMs=" + display.statusAge() + " axisMax=" + display.ceiling + " visiblePeak=" + display.visiblePeak + " drawMaxUs=" + display.drawMaxUs);
             display.drawMaxUs = 0;
         }
         ui.postDelayed(this, 1000);
@@ -82,6 +82,7 @@ public final class MainActivity extends Activity {
         workers = new ScheduledThreadPoolExecutor(2);
         int current = ++generation;
         String base = prefs.getString("server", ""), token = prefs.getString("token", "");
+        try { display.serverHost = new URL(base).getHost(); } catch (Exception e) { display.serverHost = "—"; }
         workers.execute(new Poll(true, current, base, token, prefs.getInt("interval", 500), workers));
         workers.execute(new Poll(false, current, base, token, 1000, workers));
     }

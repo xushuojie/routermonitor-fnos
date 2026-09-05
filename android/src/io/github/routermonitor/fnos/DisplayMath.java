@@ -19,9 +19,21 @@ final class DisplayMath {
     }
     static double ceiling(double max) {
         if (!valid(max) || max < 1000) return 1000;
-        double base = Math.pow(10, Math.floor(Math.log10(max)));
-        for (double step : new double[]{1, 2, 5, 10}) if (base * step >= max) return base * step;
-        return base * 10;
+        double step = Math.pow(10, Math.floor(Math.log10(max)) - 1);
+        return Math.ceil(max / step) * step;
+    }
+    static final class Axis {
+        double range = 1000;
+        long lowerSince = -1;
+        double update(double peak, long now) {
+            double target = ceiling(peak * 1.15);
+            if (target >= range) { range = target; lowerSince = -1; }
+            else {
+                if (lowerSince < 0) lowerSince = now;
+                if (now - lowerSince >= 2000) { range = target; lowerSince = -1; }
+            }
+            return range;
+        }
     }
     static final class History {
         final double[] time = new double[320], rx = new double[320], tx = new double[320];

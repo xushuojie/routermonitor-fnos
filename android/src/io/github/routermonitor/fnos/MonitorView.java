@@ -31,7 +31,9 @@ final class MonitorView extends View {
     long netAt, statusAt, clockAt, serverClock, pageAt=SystemClock.elapsedRealtime(), slideAt;
     long netSuccess, statusSuccess, failures, drawMaxUs;
     double rx=Double.NaN, tx=Double.NaN, networkAge, snapshotAge, ceiling=1000;
-    long smallerSince;
+    final DisplayMath.Axis axis=new DisplayMath.Axis();
+    String serverHost="—";
+    double visiblePeak;
     String netError="等待连接", statusError="等待连接";
     int page, previousPage;
     float scale=1, offsetX, offsetY, touchX, touchY;
@@ -44,7 +46,7 @@ final class MonitorView extends View {
         setContentDescription("NAS 监控：网速、时间、硬盘读写、轮播信息和功率 CPU GPU 内存。点击右上角或长按打开设置，点击轮播区切换。");
     }
     void reset() {
-        data=new JSONObject();history.clear();netAt=statusAt=0;rx=tx=Double.NaN;netError=statusError="连接中";ceiling=1000;invalidate();
+        data=new JSONObject();history.clear();netAt=statusAt=0;rx=tx=Double.NaN;netError=statusError="连接中";ceiling=axis.range=1000;axis.lowerSince=-1;invalidate();
     }
     long netAge(){return netAt==0?Long.MAX_VALUE:SystemClock.elapsedRealtime()-netAt;}
     long statusAge(){return statusAt==0?Long.MAX_VALUE:SystemClock.elapsedRealtime()-statusAt;}
@@ -59,7 +61,7 @@ final class MonitorView extends View {
     }
     void network(JSONObject value,long received) {
         String epoch=value.optString("epoch","");
-        if(!epoch.equals(history.epoch)){history.clear();history.epoch=epoch;ceiling=1000;}
+        if(!epoch.equals(history.epoch)){history.clear();history.epoch=epoch;ceiling=axis.range=1000;axis.lowerSince=-1;}
         JSONArray rates=value.optJSONArray("rate"),points=value.optJSONArray("points");
         if(rates==null||points==null){failed(true,"数据格式错误");return;}
         rx=point(rates,0);tx=point(rates,1);
@@ -99,29 +101,30 @@ final class MonitorView extends View {
         scale=Math.min(getWidth()/960f,getHeight()/540f);offsetX=(getWidth()-960*scale)/2;offsetY=(getHeight()-540*scale)/2;
         c.save();c.translate(offsetX,offsetY);c.scale(scale,scale);
         text(c,"FNOS / 桌面监控",24,39,18,MUTED);
+        text(c,"NAS · "+serverHost,210,39,16,MUTED);
         String connection=netFresh()&&statusFresh()&&netError.length()==0&&statusError.length()==0?"● 在线 · 设置":"● "+(netError.length()>0?netError:statusError.length()>0?statusError:"数据已过期")+" · 设置";
         right(c,connection,936,39,18,connection.startsWith("● 在线")?GREEN:GOLD);
         speed(c,24,"↑ 上传",netFresh()?tx:Double.NaN,UP);
         speed(c,257,"↓ 下载",netFresh()?rx:Double.NaN,DOWN);
         chart(c,now);
-        line(c,24,318,936,318,LINE,1);
+        line(c,24,324,470,324,LINE,1);
         disk(c,24,"R 读取",metric("disk_io","read_speed",true),GREEN);
-        disk(c,490,"W 写入",metric("disk_io","write_speed",true),GOLD);
+        disk(c,257,"W 写入",metric("disk_io","write_speed",true),GOLD);
         Date wall=new Date(serverClock>0?serverClock+now-clockAt:System.currentTimeMillis());
         String hours=hm.format(wall);
-        paint.setTextSize(96);float width=paint.measureText(hours);
-        paint.setTextSize(40);float clockX=490+(446-width-3-paint.measureText(seconds.format(wall)))/2;
-        text(c,hours,clockX,150,96,TEXT);
-        text(c,seconds.format(wall),clockX+width+3,150,40,MUTED);
+        paint.setTextSize(128);float width=paint.measureText(hours);
+        paint.setTextSize(48);float clockX=490+(446-width-3-paint.measureText(seconds.format(wall)))/2;
+        text(c,hours,clockX,178,128,TEXT);
+        text(c,seconds.format(wall),clockX+width+3,178,48,MUTED);
         paint.setTextSize(20);String day=date.format(wall);
-        text(c,day,490+(446-paint.measureText(day))/2,178,20,MUTED);
+        text(c,day,490+(446-paint.measureText(day))/2,218,20,MUTED);
         if(now-pageAt>=5000){nextPage(now);}
-        panel(c,490,184,446,122);
-        c.save();c.clipRect(490,184,936,286);
+        panel(c,490,240,446,140);
+        c.save();c.clipRect(490,240,936,352);
         float progress=slideAt==0?1:Math.min(1,(now-slideAt)/180f);
         if(progress<1){float eased=1-(1-progress)*(1-progress);c.save();c.translate(-446*eased,0);carousel(c,previousPage);c.restore();c.save();c.translate(446*(1-eased),0);carousel(c,page);c.restore();postInvalidateDelayed(33);}else carousel(c,page);
         c.restore();
-        for(int i=0;i<4;i++){paint.setColor(i==page?TEXT:Color.rgb(94,127,140));c.drawCircle(683+i*20,295,3.5f,paint);}
+        for(int i=0;i<4;i++){paint.setColor(i==page?TEXT:Color.rgb(94,127,140));c.drawCircle(677+i*24,364,3.5f,paint);}
         metricCard(c,24,"整机功率",metric("ups","watts",false),"W",35,DOWN);
         metricCard(c,257,"CPU",metric("cpu","percent",false),"%",100,UP);
         metricCard(c,490,"GPU",metric("gpu","utilization",false),"%",100,DOWN);
@@ -136,15 +139,16 @@ final class MonitorView extends View {
     void disk(Canvas c,float x,String label,double n,int color) {
         String[] parts=DisplayMath.amount(n,true);
         text(c,label,x,361,18,color);text(c,parts[0],x+65,361,36,TEXT);
-        right(c,parts[1],x+446,361,18,MUTED);
+        right(c,parts[1],x+213,361,18,MUTED);
     }
     void metricCard(Canvas c,float x,String title,double n,String unit,double limit,int color) {
-        panel(c,x,406,213,110);text(c,title,x+14,434,18,MUTED);
-        if(limit==35)right(c,"35W",x+199,434,18,MUTED);
-        String formatted=value(n,unit.equals("W")?"%.1f":"%.0f");text(c,formatted,x+14,478,40,TEXT);
-        paint.setTextSize(40);float w=paint.measureText(formatted);text(c,unit,x+17+w,478,20,MUTED);
-        paint.setColor(LINE);rect.set(x+14,497,x+199,505);c.drawRoundRect(rect,3,3,paint);
-        if(DisplayMath.valid(n)&&n>0){paint.setColor(color);rect.right=x+14+(float)(185*Math.min(1,n/limit));c.drawRoundRect(rect,3,3,paint);}
+        panel(c,x,400,213,116);text(c,title,x+16,434,18,MUTED);
+        if(limit==35)right(c,"35W",x+197,434,18,MUTED);
+        if(title.equals("CPU"))right(c,value(metric("temperature_summary","cpu",false),"%.0f°C"),x+197,434,18,GOLD);
+        String formatted=value(n,unit.equals("W")?"%.1f":"%.0f");text(c,formatted,x+16,484,40,TEXT);
+        paint.setTextSize(40);float w=paint.measureText(formatted);text(c,unit,x+19+w,484,20,MUTED);
+        paint.setColor(LINE);rect.set(x+16,500,x+197,508);c.drawRoundRect(rect,3,3,paint);
+        if(DisplayMath.valid(n)&&n>0){paint.setColor(color);rect.right=x+16+(float)(181*Math.min(1,n/limit));c.drawRoundRect(rect,3,3,paint);}
     }
     void nextPage(long now){previousPage=page;page=(page+1)%4;pageAt=slideAt=now;invalidate();}
     void carousel(Canvas c,int p) {
@@ -165,31 +169,29 @@ final class MonitorView extends View {
             title="存储空间";left=amount(metric("storage","total",true));leftLabel="总容量";
             rightValue=value(metric("storage","percent",true),"%.1f%%");rightLabel="已用 "+amount(metric("storage","used",true));
         }
-        text(c,title,506,208,17,MUTED);right(c,(p+1)+" / 4",920,208,17,MUTED);
-        text(c,left,506,253,28,TEXT);right(c,rightValue,920,253,28,TEXT);
-        text(c,leftLabel,506,280,16,p==0?UP:MUTED);right(c,rightLabel,920,280,16,p==0?DOWN:MUTED);
+        text(c,title,506,274,18,MUTED);right(c,(p+1)+" / 4",920,274,18,MUTED);
+        text(c,left,545.75f,318,30,TEXT);right(c,rightValue,880.25f,318,30,TEXT);
+        text(c,leftLabel,545.75f,344,16,p==0?UP:MUTED);right(c,rightLabel,880.25f,344,16,p==0?DOWN:MUTED);
     }
     void chart(Canvas c,long now) {
         double end=history.size>0?history.time[history.index(history.size-1)]+Math.min(65,netAge()/1000d)+networkAge:0;
         double maximum=0;
-        for(int i=0;i<history.size;i++){int j=history.index(i);if(history.time[j]<end-60)continue;if(DisplayMath.valid(history.rx[j]))maximum=Math.max(maximum,history.rx[j]);if(DisplayMath.valid(history.tx[j]))maximum=Math.max(maximum,history.tx[j]);}
-        double proposed=DisplayMath.ceiling(maximum*1.15);
-        if(proposed>ceiling){ceiling=proposed;smallerSince=0;}
-        else if(proposed<ceiling){if(smallerSince==0)smallerSince=now;if(now-smallerSince>10000){ceiling=proposed;smallerSince=0;}}else smallerSince=0;
+        for(int i=0;i<history.size;i++){int j=history.index(i);if(history.time[j]<end-60||history.time[j]>end)continue;if(DisplayMath.valid(history.rx[j]))maximum=Math.max(maximum,history.rx[j]);if(DisplayMath.valid(history.tx[j]))maximum=Math.max(maximum,history.tx[j]);}
+        visiblePeak=maximum;ceiling=axis.update(maximum,now);
         String[] top=DisplayMath.amount(ceiling,true);text(c,top[0]+" "+top[1],24,198,16,MUTED);right(c,"网络趋势 · 近 60 秒",470,198,16,MUTED);
-        line(c,24,208,470,208,LINE,1);line(c,24,248,470,248,LINE,1);line(c,24,287,470,287,LINE,1);
-        c.save();c.clipRect(24,207,470,289);
+        line(c,24,212,470,212,LINE,1);line(c,24,250,470,250,LINE,1);line(c,24,288,470,288,LINE,1);
+        c.save();c.clipRect(24,211,470,290);
         for(int series=0;series<2;series++) {
             path.reset();boolean connected=false;
             for(int i=0;i<history.size;i++) {
                 int j=history.index(i);double t=history.time[j],v=series==0?history.tx[j]:history.rx[j];
                 if(t<end-60||t>end||!DisplayMath.valid(v)){connected=false;continue;}
-                float x=(float)(24+(t-(end-60))/60*446),y=(float)(287-v/ceiling*79);
+                float x=(float)(24+(t-(end-60))/60*446),y=(float)(288-v/ceiling*76);
                 if(!connected||history.gap[j])path.moveTo(x,y);else path.lineTo(x,y);connected=true;
             }
             paint.setColor(series==0?UP:DOWN);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(2);c.drawPath(path,paint);paint.setStyle(Paint.Style.FILL);
         }
-        c.restore();text(c,"0 · −60s",24,305,16,MUTED);text(c,"−30s",223,305,16,MUTED);right(c,"现在",470,305,16,MUTED);
+        c.restore();text(c,"0 · −60s",24,308,16,MUTED);text(c,"−30s",223,308,16,MUTED);right(c,"现在",470,308,16,MUTED);
     }
     final Runnable hold=new Runnable(){public void run(){longPressed=true;activity.settings();}};
     @Override public boolean onTouchEvent(MotionEvent event) {
@@ -197,7 +199,7 @@ final class MonitorView extends View {
         if(event.getAction()==MotionEvent.ACTION_DOWN){touchX=x;touchY=y;longPressed=false;postDelayed(hold,650);return true;}
         if(event.getAction()==MotionEvent.ACTION_MOVE&&Math.abs(x-touchX)+Math.abs(y-touchY)>20)removeCallbacks(hold);
         if(event.getAction()==MotionEvent.ACTION_CANCEL){removeCallbacks(hold);return true;}
-        if(event.getAction()==MotionEvent.ACTION_UP){removeCallbacks(hold);if(!longPressed){if(y<58&&x>600)activity.settings();else if(x>=490&&y>=184&&y<=306)nextPage(SystemClock.elapsedRealtime());performClick();}return true;}
+        if(event.getAction()==MotionEvent.ACTION_UP){removeCallbacks(hold);if(!longPressed){if(y<58&&x>600)activity.settings();else if(x>=490&&x<=936&&y>=240&&y<=380)nextPage(SystemClock.elapsedRealtime());performClick();}return true;}
         return true;
     }
     @Override public boolean performClick(){super.performClick();return true;}

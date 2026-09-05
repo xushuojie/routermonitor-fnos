@@ -1,4 +1,4 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="io.github.routermonitor.fnos" android:versionCode="3" android:versionName="1.0.2">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="io.github.routermonitor.fnos" android:versionCode="4" android:versionName="1.0.3">
     <uses-sdk android:minSdkVersion="18" android:targetSdkVersion="18" />
     <uses-permission android:name="android.permission.INTERNET" />
     <application android:label="NAS Monitor" android:icon="@android:drawable/ic_menu_view" android:allowBackup="false" android:theme="@android:style/Theme.Holo.NoActionBar.Fullscreen" android:hardwareAccelerated="true">
