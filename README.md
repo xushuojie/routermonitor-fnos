@@ -4,6 +4,16 @@
 
 [快速部署](#1-部署-nas-服务) · [网页控制台](#打开-nas-网页控制台) · [屏幕与烧录](#2-编译和烧录固件) · [服务端完整说明](nas-docker/README.md)
 
+## 下载发行版
+
+[GitHub Releases](https://github.com/xushuojie/routermonitor-fnos/releases/latest) 提供两种屏幕的预编译固件、Docker 服务端部署包及 `SHA256SUMS.txt` 校验文件。
+
+- `st7789.bin`：ST7789 240 × 240 小屏幕，对应默认 `nodemcuv2` 配置。
+- `ili9341.bin`：ILI9341 屏幕的 240 × 240 显示区域，对应 `nodemcuv2_ili9341`，仅编译验证。
+- `nas-docker.zip`：解压后进入 `nas-docker`，按部署说明配置 `.env` 并执行 `docker compose up -d --build`；这是部署源码包，不是预构建 Docker 镜像。
+
+下载文件名带项目名和版本号。固件为写入 ESP8266 Flash 地址 `0x0` 的程序映像，不含 Wi-Fi、Token 或 LittleFS 配置；升级前请核对屏幕与接线，勿为更新程序而擦除整片 Flash。可用 `shasum -a 256 -c SHA256SUMS.txt` 校验同目录下的全部发行文件。
+
 ![NAS 网页控制台：实时数据概览](images/web-overview.png)
 
 一台基于 ESP8266 和 240 × 240 彩屏的 NAS 桌面监控小电视。设备通过 HTTP 长连接每秒获取 NAS 展示状态，同时每 200 毫秒获取共享网络采样，显示网络与硬盘读写速率、CPU/GPU/内存占用、时间及四页轮播信息。
