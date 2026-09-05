@@ -311,7 +311,7 @@ class DetectionTests(unittest.TestCase):
         with patch.dict(os.environ, {"NAS_STATUS_HISTORY_DB": db_path}), \
              patch("sys.argv", ["api.py"]), patch.object(api.time, "time", return_value=15), \
              patch.object(api, "resolve_token", return_value="secret"), \
-             patch.object(api, "ThreadingHTTPServer"):
+             patch.object(api, "LimitedHTTPServer"):
             api.main()
             self.assertEqual(api._network_epoch, 100)
             history = api.TrafficHistory(db_path, api.traffic_sample)

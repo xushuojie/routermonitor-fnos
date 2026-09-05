@@ -1,0 +1,52 @@
+# Include inside nginx's http {}. Replace hostname and certificate paths.
+# This proxy must be on the NAS, or use the NAS LAN IP as the upstream.
+limit_req_zone $binary_remote_addr zone=nas_login:1m rate=5r/m;
+limit_conn_zone $binary_remote_addr zone=nas_connections:1m;
+
+server {
+    listen 80;
+    server_name nas.example.com;
+    return 308 https://nas.example.com$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name nas.example.com;
+    ssl_certificate /etc/nginx/certs/fullchain.pem;
+    ssl_certificate_key /etc/nginx/certs/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    server_tokens off;
+    client_max_body_size 32k;
+    client_header_timeout 10s;
+    client_body_timeout 10s;
+    keepalive_timeout 15s;
+    limit_conn nas_connections 8;
+    # Do not persist tokens accidentally supplied in query strings.
+    access_log off;
+
+    # Device endpoints remain LAN-only, even with a valid read-only token.
+    location = /status { return 404; }
+    location = /net { return 404; }
+    location = /health { return 404; }
+
+    location = /api/login {
+        limit_req zone=nas_login burst=3 nodelay;
+        limit_req_status 429;
+        proxy_pass http://127.0.0.1:18199;
+        proxy_http_version 1.1;
+        proxy_set_header Host nas.example.com;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Connection "";
+        proxy_connect_timeout 3s;
+        proxy_read_timeout 10s;
+    }
+    location / {
+        proxy_pass http://127.0.0.1:18199;
+        proxy_http_version 1.1;
+        proxy_set_header Host nas.example.com;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Connection "";
+        proxy_connect_timeout 3s;
+        proxy_read_timeout 10s;
+    }
+}

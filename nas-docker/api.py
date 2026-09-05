@@ -22,6 +22,31 @@ from urllib.parse import parse_qs, urlsplit
 
 from traffic_history import TrafficHistory
 
+
+class LimitedHTTPServer(ThreadingHTTPServer):
+    """Bound threads even when clients hold idle or incomplete requests open."""
+    request_queue_size = 32
+
+    def __init__(self, *args, **kwargs):
+        self.slots = threading.BoundedSemaphore(32)
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request, address):
+        if not self.slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, address)
+        except BaseException:
+            self.slots.release()
+            raise
+
+    def process_request_thread(self, request, address):
+        try:
+            super().process_request_thread(request, address)
+        finally:
+            self.slots.release()
+
 PROC_ROOT = os.environ.get("PROC_ROOT", "/host")
 SYS_ROOT = os.environ.get("SYS_ROOT", "/host")
 DEBUGFS_ROOT = os.environ.get("DEBUGFS_ROOT", "/host/debug")
@@ -808,6 +833,36 @@ def handler_factory(metrics, token, network=None, web=None):
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
+        server_version = "NASMonitor"
+        sys_version = ""
+
+        def parse_request(self):
+            if not super().parse_request():
+                return False
+            # Reject ambiguous framing before either GUI or device routing.
+            lengths = self.headers.get_all('Content-Length', [])
+            hosts = self.headers.get_all('Host', [])
+            invalid = len(hosts) != 1 or len(lengths) > 1 or bool(self.headers.get_all('Transfer-Encoding'))
+            invalid |= sum(len(key) + len(value) for key, value in self.headers.items()) > 16384
+            length = lengths[0] if lengths else '0'
+            invalid |= not length.isascii() or not length.isdecimal() or len(length) > 8
+            if not invalid:
+                invalid = int(length) > 32768 or (self.command == 'GET' and int(length) != 0)
+            try:
+                target = urlsplit(self.path)
+                invalid |= not self.path.startswith('/') or self.path.startswith('//') or bool(target.netloc or target.scheme or target.fragment)
+            except ValueError:
+                invalid = True
+            if invalid:
+                self.close_connection = True
+                self.respond(400, {'error': 'invalid request'})
+                return False
+            return True
+
+        def handle_expect_100(self):
+            self.send_error(417)
+            self.close_connection = True
+            return False
 
         def setup(self):
             super().setup()
@@ -826,7 +881,7 @@ def handler_factory(metrics, token, network=None, web=None):
             if path not in ("/", "/status", "/net"):
                 return self.respond(404, {"error": "not found"})
             supplied = self.headers.get("Authorization", "")
-            if not token or not hmac.compare_digest(supplied, "Bearer " + token):
+            if not token or not hmac.compare_digest(supplied.encode('utf-8'), ("Bearer " + token).encode('utf-8')):
                 self.close_connection = True
                 return self.respond(401, {"error": "unauthorized"})
             if web is not None:
@@ -890,7 +945,9 @@ def handler_factory(metrics, token, network=None, web=None):
         def log_message(self, message, *args):
             if self.command == "GET" and self.path.split("?", 1)[0] in ("/net", "/status", "/api/overview", "/api/network/stream", "/api/network/interfaces", "/api/capabilities", "/api/session") and len(args) > 1 and str(args[1]) == "200":
                 return
-            print("%s - %s" % (self.address_string(), message % args), flush=True)
+            # Never persist query strings, submitted headers or control characters.
+            status = str(args[1]) if len(args) > 1 and str(args[1]).isdigit() else 'error'
+            print(json.dumps({'peer': self.client_address[0], 'method': self.command, 'status': status}), flush=True)
 
     return Handler
 
@@ -902,8 +959,8 @@ def main():
     parser.add_argument("--bind", default=os.environ.get("NAS_STATUS_BIND", "0.0.0.0"))
     args = parser.parse_args()
     token = resolve_token()
-    if not token:
-        raise SystemExit("NAS_STATUS_TOKEN or NAS_STATUS_TOKEN_FILE is required")
+    if not token or token == 'replace-with-a-long-random-token':
+        raise SystemExit("Set a real NAS_STATUS_TOKEN or NAS_STATUS_TOKEN_FILE; the example token is not accepted")
     data_dir = os.path.dirname(os.environ.get("NAS_STATUS_HISTORY_DB", DEFAULT_HISTORY_DB))
     from network_sources import Sources
     from web import WebApp
@@ -918,7 +975,7 @@ def main():
     network.start()
     metrics = Metrics(history, network)
     web = WebApp(NETWORK_SOURCES, metrics, data_dir)
-    server = ThreadingHTTPServer((args.bind, args.port), handler_factory(metrics, token, network, web))
+    server = LimitedHTTPServer((args.bind, args.port), handler_factory(metrics, token, network, web))
     metrics.ups.start()
     history.start()
     metrics.start()
