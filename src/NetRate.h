@@ -6,6 +6,10 @@
 
 struct NasNetSample
 {
+    bool serverRates = false;
+    bool gap = false;
+    float rxRate = -1, txRate = -1;
+    float rxAverage = -1, txAverage = -1;
     double sampleTime = 0;
     double rxBytes = 0;
     double txBytes = 0;

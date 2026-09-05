@@ -42,9 +42,19 @@ int main() {
     assert(parser.statusCode() == 200 && parser.bodyLength() == 7);
     assert(std::strcmp(parser.body(), "{\"x\":1}") == 0);
 
+    assert(!parser.reusable());
     parser.reset();
     feed(parser, "HTTP/1.1 200 OK\ncontent-length: 0\n\n", 1);
     assert(parser.state() == HttpResponseState::Complete && parser.bodyLength() == 0);
+    assert(parser.reusable());
+    parser.reset();
+    feed(parser, "HTTP/1.1 200 OK\r\nConnection: keep-alive, CLOSE \r\nContent-Length: 0\r\n\r\n");
+    assert(!parser.reusable());
+    parser.reset();
+    const std::string combined = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}EXTRA";
+    assert(parser.feed(combined.data(), combined.size()) == combined.size() - 5);
+    assert(parser.reusable());
+
 
     parser.reset();
     feed(parser, "HTTP/1.0 401 Unauthorized\r\nContent-Length: 2\r\n\r\n{}");
@@ -93,6 +103,28 @@ int main() {
     schedule.finish(1040, true);
     assert(schedule.pick(1199) == NasRequestKind::None);
     assert(schedule.pick(1200) == NasRequestKind::Net);
+
+    // Even a successful net request taking longer than its interval cannot starve status.
+    schedule.reset(0);
+    uint32_t statusCount = 0;
+    for (uint32_t now = 0; now < 10000; now += 350) {
+        auto kind = schedule.pick(now);
+        assert(kind != NasRequestKind::None);
+        statusCount += kind == NasRequestKind::Status;
+        schedule.start(kind, now);
+        schedule.finish(now + 350, true);
+    }
+    assert(statusCount >= 7);
+
+    schedule.reset(0);
+    schedule.start(NasRequestKind::Net, 0); schedule.finish(400, false);
+    schedule.start(NasRequestKind::Status, 400); schedule.finish(1150, false);
+    schedule.start(NasRequestKind::Net, 1150); schedule.finish(1160, true);
+    assert(schedule.pick(1160) == NasRequestKind::Status);
+    // A healthy net channel must not hammer an independently failing status endpoint.
+    schedule.start(NasRequestKind::Status, 1160); schedule.finish(1170, false);
+    schedule.start(NasRequestKind::Net, 1350); schedule.finish(1360, true);
+    assert(schedule.pick(1360) == NasRequestKind::None);
 
     const uint32_t nearWrap = UINT32_MAX - 100;
     schedule.reset(nearWrap);

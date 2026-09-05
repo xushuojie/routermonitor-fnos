@@ -285,27 +285,30 @@ static uint32_t chartRate(double bytesPerSecond)
 {
     if (!isfinite(bytesPerSecond) || bytesPerSecond <= 0)
         return 0;
-    return bytesPerSecond >= UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(bytesPerSecond);
+    return bytesPerSecond >= UINT32_MAX - 1 ? UINT32_MAX - 1 : static_cast<uint32_t>(bytesPerSecond);
 }
 
 static void appendChartSample(double rxBytesPerSecond, double txBytesPerSecond)
 {
     memmove(downloadSeries, downloadSeries + 1, sizeof(downloadSeries) - sizeof(downloadSeries[0]));
     memmove(uploadSeries, uploadSeries + 1, sizeof(uploadSeries) - sizeof(uploadSeries[0]));
-    downloadSeries[CHART_POINT_COUNT - 1] = chartRate(rxBytesPerSecond);
-    uploadSeries[CHART_POINT_COUNT - 1] = chartRate(txBytesPerSecond);
+    downloadSeries[CHART_POINT_COUNT - 1] = rxBytesPerSecond < 0 ? UINT32_MAX : chartRate(rxBytesPerSecond);
+    uploadSeries[CHART_POINT_COUNT - 1] = txBytesPerSecond < 0 ? UINT32_MAX : chartRate(txBytesPerSecond);
 
     uint32_t maximum = 1;
     for (uint8_t index = 0; index < CHART_POINT_COUNT; ++index)
-        maximum = max(maximum, max(downloadSeries[index], uploadSeries[index]));
+    {
+        if (downloadSeries[index] != UINT32_MAX) maximum = max(maximum, downloadSeries[index]);
+        if (uploadSeries[index] != UINT32_MAX) maximum = max(maximum, uploadSeries[index]);
+    }
     const uint32_t scale = maximum / 1000 + (maximum % 1000 != 0);
 
     lv_coord_t points[CHART_POINT_COUNT];
     for (uint8_t index = 0; index < CHART_POINT_COUNT; ++index)
-        points[index] = static_cast<lv_coord_t>(uploadSeries[index] / scale);
+        points[index] = uploadSeries[index] == UINT32_MAX ? LV_CHART_POINT_DEF : static_cast<lv_coord_t>(uploadSeries[index] / scale);
     lv_chart_set_points(chart, ser1, points);
     for (uint8_t index = 0; index < CHART_POINT_COUNT; ++index)
-        points[index] = static_cast<lv_coord_t>(downloadSeries[index] / scale);
+        points[index] = downloadSeries[index] == UINT32_MAX ? LV_CHART_POINT_DEF : static_cast<lv_coord_t>(downloadSeries[index] / scale);
     lv_chart_set_points(chart, ser2, points);
 }
 
@@ -325,6 +328,7 @@ static void net_task_cb(lv_task_t *task)
             if (rateVisible)
             {
                 rateVisible = false;
+                appendChartSample(-1, -1);
                 nasStatus.rxBytesPerSecond = nasStatus.txBytesPerSecond = -1;
                 updateNetworkInfoLabel();
             }
@@ -332,6 +336,25 @@ static void net_task_cb(lv_task_t *task)
         return;
     }
     lastSuccessAt = millis();
+    if (current.serverRates)
+    {
+        if (current.gap)
+        {
+            // A lost interval has no known duration on this fixed 200 ms axis.
+            memset(downloadSeries, 0xff, sizeof(downloadSeries));
+            memset(uploadSeries, 0xff, sizeof(uploadSeries));
+        }
+        appendChartSample(current.rxRate, current.txRate);
+        nasStatus.rxBytesPerSecond = current.rxAverage;
+        nasStatus.txBytesPerSecond = current.txAverage;
+        rateVisible = current.rxAverage >= 0 && current.txAverage >= 0;
+        updateNetworkInfoLabel();
+        havePrevious = false;
+        return;
+    }
+    if (havePrevious && current.sampleTime == previous.sampleTime &&
+        strcmp(current.iface, previous.iface) == 0 && strcmp(current.counterEpoch, previous.counterEpoch) == 0)
+        return;
     if (!havePrevious)
     {
         previous = speedBaseline = current;
@@ -342,6 +365,7 @@ static void net_task_cb(lv_task_t *task)
     if (!calculateNetRate(previous, current, adjacent) || adjacent.elapsedSeconds > 1.0)
     {
         speedBaseline = current;
+        appendChartSample(-1, -1);
         // Counter reset and sample gaps are unknown, not a plausible zero rate.
         nasStatus.rxBytesPerSecond = nasStatus.txBytesPerSecond = -1;
         updateNetworkInfoLabel();
@@ -429,8 +453,8 @@ static void renderCarousel()
     const char *secondUnit = "";
     static uint8_t renderedPage = 255;
     static unsigned long renderedUptimeDays = UINT32_MAX;
-    const unsigned long uptimeDays = nasOnline ? nas_uptime_seconds / 86400UL : UINT32_MAX;
-    const bool longUptime = nasOnline && uptimeDays > 999;
+    const unsigned long uptimeDays = nasOnline && nasStatus.uptimeValid ? nas_uptime_seconds / 86400UL : UINT32_MAX;
+    const bool longUptime = nasOnline && nasStatus.uptimeValid && uptimeDays > 999;
     carouselLayoutChanged = renderedPage != carouselPage ||
                             (carouselPage == 1 && renderedUptimeDays != uptimeDays);
     if (carouselLayoutChanged)
@@ -472,7 +496,7 @@ static void renderCarousel()
     }
     else if (carouselPage == 1)
     {
-        if (nasOnline)
+        if (nasOnline && nasStatus.uptimeValid)
         {
             snprintf(first, sizeof(first), "%lu", nas_uptime_seconds / 86400UL);
             snprintf(second, sizeof(second), "%02lu", (nas_uptime_seconds / 3600UL) % 24UL);
@@ -716,7 +740,7 @@ static void updateMetric(lv_obj_t *bar, lv_obj_t *label, double percentage, bool
 {
     char text[8] = "--";
     int value = 0;
-    if (valid && isfinite(percentage))
+    if (valid && isfinite(percentage) && percentage >= 0 && percentage <= 100)
     {
         value = constrain(static_cast<int>(round(percentage)), 0, 100);
         snprintf(text, sizeof(text), "%d%%", value);
@@ -1049,12 +1073,12 @@ static void reportDiagnostics()
     lv_mem_monitor_t memory;
     lv_mem_monitor(&memory);
     const NasRequestHealth &health = getNasRequestHealth();
-    Serial.printf("HTTP net=%lu/%lu fail=%lu max=%lums status=%lu/%lu fail=%lu max=%lums error=%u\r\n",
+    Serial.printf("HTTP net=%lu/%lu fail=%lu max=%lums status=%lu/%lu fail=%lu max=%lums error=%u tcp=%lu\r\n",
                   (unsigned long)health.netSuccesses, (unsigned long)health.netRequests,
                   (unsigned long)health.netFailures, (unsigned long)health.netMaxLatencyMs,
                   (unsigned long)health.statusSuccesses, (unsigned long)health.statusRequests,
                   (unsigned long)health.statusFailures, (unsigned long)health.statusMaxLatencyMs,
-                  (unsigned)health.lastError);
+                  (unsigned)health.lastError, (unsigned long)health.connections);
     Serial.printf("PERF heap=%lu min=%lu block=%lu stack=%lu lvfree=%lu lvblock=%lu lvfrag=%u loop=%lums frames=%lu frameMax=%lums slow=%lu\r\n",
                   (unsigned long)ESP.getFreeHeap(), (unsigned long)minHeap,
                   (unsigned long)ESP.getMaxFreeBlockSize(), (unsigned long)ESP.getFreeContStack(),

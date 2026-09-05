@@ -20,11 +20,12 @@ extern "C"
 struct NasStatusSnapshot
 {
     double powerWatts = -1;
-    double cpuPercent = 0;
-    double gpuPercent = 0;
-    double memoryPercent = 0;
+    double cpuPercent = -1;
+    double gpuPercent = -1;
+    double memoryPercent = -1;
     double cpuTemperature = -1;
     double diskTemperature = -1;
+    bool uptimeValid = true;
     uint32_t uptimeSeconds = 0;
     double rxBytesPerSecond = -1;
     double txBytesPerSecond = -1;
@@ -64,6 +65,7 @@ struct NasRequestHealth
     uint16_t lastHttpStatus = 0;
     uint32_t lastNetSuccessAt = 0;
     uint32_t lastStatusSuccessAt = 0;
+    uint32_t connections = 0;
     uint32_t netRequests = 0;
     uint32_t netSuccesses = 0;
     uint32_t netFailures = 0;
@@ -114,6 +116,11 @@ public:
         processDns(now);
         if (schedule_.active() == NasRequestKind::None)
         {
+            if (tcpError_ || remoteClosed_ || received_ || responseTooLarge_)
+            {
+                abortConnection();
+                clearReceived();
+            }
             startDueRequest(now);
             return;
         }
@@ -177,6 +184,17 @@ public:
 
     bool takeNet(NasNetSample &sample)
     {
+        if (pointIndex_ < pointCount_)
+        {
+            sample = netSample_;
+            const GraphPoint &point = points_[pointIndex_];
+            sample.sampleTime = point.time;
+            sample.rxRate = point.rx;
+            sample.txRate = point.tx;
+            sample.gap = netSample_.gap && pointIndex_ == 0;
+            ++pointIndex_;
+            return true;
+        }
         if (!netReady_)
             return false;
         sample = netSample_;
@@ -209,6 +227,9 @@ public:
         addressValid_ = false;
         dnsDone_ = false;
         netReady_ = statusReady_ = false;
+        pointIndex_ = pointCount_ = 0;
+        sequence_ = 0;
+        streamEpoch_[0] = 0;
         phase_ = Phase::Idle;
         clearRequest();
         schedule_.reset(millis());
@@ -267,6 +288,9 @@ private:
         addressValid_ = false;
         dnsDone_ = false;
         netReady_ = statusReady_ = false;
+        pointIndex_ = pointCount_ = 0;
+        sequence_ = 0;
+        streamEpoch_[0] = 0;
         clearRequest();
         health_.authRejected = false;
         health_.lastError = NasRequestError::None;
@@ -278,7 +302,11 @@ private:
         if (schedule_.active() != NasRequestKind::None)
             fail(error, now);
         else
+        {
             health_.lastError = error;
+            abortConnection();
+            clearReceived();
+        }
     }
 
     void startDueRequest(uint32_t now)
@@ -286,7 +314,7 @@ private:
         if (health_.authRejected && !NasRequestSchedule::reached(now, authRetryAt_))
             return;
         const NasRequestKind kind = schedule_.pick(now);
-        if (kind == NasRequestKind::None)
+        if (kind == NasRequestKind::None || (kind == NasRequestKind::Net && pointIndex_ < pointCount_))
             return;
         if (dnsPending_ && !addressValid_)
         {
@@ -310,6 +338,11 @@ private:
         if (!buildRequest(kind))
         {
             fail(NasRequestError::InvalidConfig, now);
+            return;
+        }
+        if (pcb_)
+        {
+            phase_ = Phase::Sending;
             return;
         }
         if (addressValid_)
@@ -347,9 +380,11 @@ private:
         if (!deviceConfig.nasPort || !safeHeaderValue(deviceConfig.nasHost) ||
             !safeHeaderValue(deviceConfig.nasToken))
             return false;
-        const char *path = kind == NasRequestKind::Net ? "/net" : "/status?display=1";
+        char netPath[96];
+        snprintf(netPath, sizeof(netPath), "/net?v=2&since=%lu&epoch=%s", (unsigned long)sequence_, streamEpoch_);
+        const char *path = kind == NasRequestKind::Net ? netPath : "/status?display=1&v=2";
         const int length = snprintf(request_, sizeof(request_),
-                                    "GET %s HTTP/1.0\r\nHost: %s\r\nAuthorization: Bearer %s\r\nConnection: close\r\n\r\n",
+                                    "GET %s HTTP/1.1\r\nHost: %s\r\nAuthorization: Bearer %s\r\nConnection: keep-alive\r\n\r\n",
                                     path, deviceConfig.nasHost, deviceConfig.nasToken);
         if (length < 0 || static_cast<size_t>(length) >= sizeof(request_))
             return false;
@@ -366,6 +401,7 @@ private:
             fail(NasRequestError::Connect, now);
             return;
         }
+        ++health_.connections;
         tcp_setprio(pcb_, TCP_PRIO_MIN);
         tcp_nagle_disable(pcb_);
         tcp_arg(pcb_, this);
@@ -476,9 +512,11 @@ private:
 
     bool parseNet()
     {
-        StaticJsonDocument<320> doc;
+        StaticJsonDocument<768> doc;
         if (deserializeJson(doc, response_.body(), response_.bodyLength()))
             return false;
+        if (doc.containsKey("v"))
+            return doc["v"] == 2 && parseNetV2(doc);
         const char *iface = doc["iface"] | "";
         const char *epoch = "";
         JsonVariant epochValue = doc["counter_epoch"];
@@ -513,6 +551,63 @@ private:
         return true;
     }
 
+    bool parseNetV2(JsonDocument &doc)
+    {
+        const char *source = doc["source"] | "";
+        const char *epoch = doc["epoch"] | "";
+        if (!source[0] || strlen(source) >= sizeof(netSample_.iface) ||
+            !epoch[0] || strlen(epoch) >= sizeof(streamEpoch_) ||
+            !doc["seq"].is<uint32_t>() || !doc["age"].is<double>() ||
+            !isfinite(doc["age"].as<double>()) || doc["age"].as<double>() < 0 || doc["age"].as<double>() > 1 ||
+            !doc["gap"].is<bool>() || !doc["points"].is<JsonArray>() || !doc["rate"].is<JsonArray>())
+            return false;
+        for (const char *digit = epoch; *digit; ++digit)
+            if (*digit < '0' || *digit > '9') return false;
+        JsonArray rows = doc["points"];
+        JsonArray average = doc["rate"];
+        if (rows.size() > 4 || average.size() != 2) return false;
+        uint32_t previous = 0;
+        double previousTime = 0;
+        uint8_t count = 0;
+        for (JsonArray row : rows)
+        {
+            if (row.size() != 4 || !row[0].is<uint32_t>() || !row[1].is<double>()) return false;
+            const uint32_t seq = row[0].as<uint32_t>();
+            const double stamp = row[1].as<double>();
+            if (!seq || (count && seq != previous + 1) || !isfinite(stamp) || stamp <= previousTime)
+                return false;
+            for (uint8_t index = 2; index < 4; ++index)
+                if (!row[index].isNull() && (!row[index].is<double>() ||
+                    !isfinite(row[index].as<double>()) || row[index].as<double>() < 0 || row[index].as<double>() > 1e15)) return false;
+            points_[count++] = {stamp, static_cast<float>(optionalNumber(row[2])), static_cast<float>(optionalNumber(row[3]))};
+            previous = seq;
+            previousTime = stamp;
+        }
+        const uint32_t seq = doc["seq"].as<uint32_t>();
+        if (count && previous != seq) return false;
+        for (uint8_t index = 0; index < 2; ++index)
+            if (!average[index].isNull() && (!average[index].is<double>() ||
+                !isfinite(average[index].as<double>()) || average[index].as<double>() < 0 || average[index].as<double>() > 1e15)) return false;
+        const bool changed = strcmp(streamEpoch_, epoch) != 0 || strcmp(netSample_.iface, source) != 0;
+        if (!changed && seq < sequence_) return false;
+        if (count && !changed && !doc["gap"].as<bool>() && rows[0][0].as<uint32_t>() != sequence_ + 1) return false;
+        if (!count && (changed || seq != sequence_)) return false;
+        if (!changed && seq == sequence_) return count == 0;
+        netSample_ = NasNetSample();
+        netSample_.serverRates = true;
+        netSample_.gap = changed || doc["gap"].as<bool>();
+        netSample_.rxAverage = optionalNumber(average[0]);
+        netSample_.txAverage = optionalNumber(average[1]);
+        strlcpy(netSample_.iface, source, sizeof(netSample_.iface));
+        strlcpy(netSample_.counterEpoch, epoch, sizeof(netSample_.counterEpoch));
+        strlcpy(streamEpoch_, epoch, sizeof(streamEpoch_));
+        sequence_ = seq;
+        pointIndex_ = 0;
+        pointCount_ = count;
+        netReady_ = false;
+        return true;
+    }
+
     static bool number(JsonVariantConst value, double &result)
     {
         if (!value.is<double>())
@@ -529,18 +624,18 @@ private:
 
     bool parseStatus()
     {
-        StaticJsonDocument<768> doc;
+        StaticJsonDocument<1024> doc;
         if (deserializeJson(doc, response_.body(), response_.bodyLength()))
             return false;
         NasStatusSnapshot snapshot;
-        if (!number(doc["cpu"]["percent"], snapshot.cpuPercent) ||
-            !number(doc["gpu"]["utilization"], snapshot.gpuPercent) ||
-            !number(doc["memory"]["percent"], snapshot.memoryPercent) ||
-            snapshot.cpuPercent < 0 || snapshot.cpuPercent > 100 ||
-            snapshot.gpuPercent < 0 || snapshot.gpuPercent > 100 ||
-            snapshot.memoryPercent < 0 || snapshot.memoryPercent > 100 ||
-            !doc["uptime"].is<uint32_t>())
-            return false;
+        if (!doc.is<JsonObject>() || !doc["cpu"].is<JsonObject>() ||
+            !doc["gpu"].is<JsonObject>() || !doc["memory"].is<JsonObject>()) return false;
+        if (doc.containsKey("v") && (doc["v"] != 2 || !doc["seq"].is<uint32_t>() || !doc["age"].is<double>() ||
+            !isfinite(doc["age"].as<double>()) || doc["age"].as<double>() < 0 || doc["age"].as<double>() > 3)) return false;
+        snapshot.cpuPercent = optionalNumber(doc["cpu"]["percent"]);
+        snapshot.gpuPercent = optionalNumber(doc["gpu"]["utilization"]);
+        snapshot.memoryPercent = optionalNumber(doc["memory"]["percent"]);
+        snapshot.uptimeValid = doc["uptime"].is<uint32_t>();
         snapshot.powerWatts = optionalNumber(doc["ups"]["watts"]);
         snapshot.uptimeSeconds = doc["uptime"].as<uint32_t>();
         snapshot.cpuTemperature = optionalNumber(doc["temperature_summary"]["cpu"]);
@@ -568,6 +663,14 @@ private:
         snapshot.storageValid = storage["valid"].is<bool>() && storage["valid"].as<bool>() &&
             snapshot.storageTotalBytes >= 0 && snapshot.storageUsedBytes >= 0 &&
             snapshot.storagePercent >= 0 && snapshot.storagePercent <= 100;
+        if (doc.containsKey("v"))
+        {
+            const double temperatureAge = optionalNumber(doc["metric_age"]["temperature"]);
+            const double storageAge = optionalNumber(doc["metric_age"]["storage"]);
+            if (temperatureAge < 0 || temperatureAge > 10)
+                snapshot.cpuTemperature = snapshot.diskTemperature = -1;
+            if (storageAge < 0 || storageAge > 60) snapshot.storageValid = false;
+        }
         statusSnapshot_ = snapshot;
         statusReady_ = true;
         return true;
@@ -579,7 +682,7 @@ private:
         health_.authRejected = false;
         health_.lastError = NasRequestError::None;
         health_.lastHttpStatus = response_.statusCode();
-        finishTransport();
+        finishTransport(response_.reusable() && !remoteClosed_ && !tcpError_ && !received_);
     }
 
     void fail(NasRequestError error, uint32_t now)
@@ -632,9 +735,9 @@ private:
         schedule_.finish(now, success);
     }
 
-    void finishTransport()
+    void finishTransport(bool keepAlive = false)
     {
-        abortConnection();
+        if (!keepAlive) abortConnection();
         clearReceived();
         clearRequest();
         phase_ = Phase::Idle;
@@ -724,6 +827,11 @@ private:
         return ERR_OK;
     }
 
+    struct GraphPoint { double time; float rx, tx; };
+    GraphPoint points_[4];
+    uint8_t pointIndex_ = 0, pointCount_ = 0;
+    uint32_t sequence_ = 0;
+    char streamEpoch_[33] = {0};
     NasRequestSchedule schedule_;
     NasRequestHealth health_;
     BoundedHttpResponse<1024, 128, 512> response_;
@@ -754,7 +862,7 @@ private:
     bool responseTooLarge_ = false;
     bool netReady_ = false;
     bool statusReady_ = false;
-    char request_[320] = {0};
+    char request_[416] = {0};
 };
 
 inline NasRequestScheduler &nasRequestScheduler()

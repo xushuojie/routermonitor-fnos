@@ -31,6 +31,7 @@ public:
         headersComplete_ = false;
         contentLengthSeen_ = false;
         transferEncodingSeen_ = false;
+        http11_ = connectionClose_ = false;
         body_[0] = '\0';
     }
 
@@ -87,6 +88,7 @@ public:
             state_ = HttpResponseState::Malformed;
     }
 
+    bool reusable() const { return state_ == HttpResponseState::Complete && http11_ && !connectionClose_; }
     HttpResponseState state() const { return state_; }
     uint16_t statusCode() const { return statusCode_; }
     char *body() { return body_; }
@@ -150,7 +152,8 @@ private:
         {
             firstLine_ = false;
             const char *space = strchr(line_, ' ');
-            if (strncmp(line_, "HTTP/1.", 7) != 0 || !space ||
+            if (strncmp(line_, "HTTP/1.", 7) != 0 || !space || space != line_ + 8 ||
+                (line_[7] != '0' && line_[7] != '1') ||
                 static_cast<size_t>(line_ + lineLength_ - space) < 4 ||
                 space[1] < '1' || space[1] > '5' ||
                 space[2] < '0' || space[2] > '9' ||
@@ -160,6 +163,7 @@ private:
                 state_ = HttpResponseState::Malformed;
                 return;
             }
+            http11_ = line_[7] == '1';
             statusCode_ = static_cast<uint16_t>((space[1] - '0') * 100 +
                                                 (space[2] - '0') * 10 + space[3] - '0');
             return;
@@ -202,6 +206,19 @@ private:
             expectedBodyLength_ = parsed;
             contentLengthSeen_ = true;
         }
+        else if (equalIgnoreCase(line_, nameLength, "connection"))
+        {
+            while (*value)
+            {
+                value = skipSpaces(value);
+                const char *end = strchr(value, ',');
+                if (!end) end = value + strlen(value);
+                const char *trim = end;
+                while (trim > value && (trim[-1] == ' ' || trim[-1] == '\t')) --trim;
+                if (equalIgnoreCase(value, trim - value, "close")) connectionClose_ = true;
+                value = *end ? end + 1 : end;
+            }
+        }
         else if (equalIgnoreCase(line_, nameLength, "transfer-encoding"))
         {
             transferEncodingSeen_ = true;
@@ -217,6 +234,8 @@ private:
     bool firstLine_ = true;
     bool headersComplete_ = false;
     bool contentLengthSeen_ = false;
+    bool http11_ = false;
+    bool connectionClose_ = false;
     bool transferEncodingSeen_ = false;
     char line_[MaxLine] = {0};
     char body_[MaxBody + 1] = {0};

@@ -94,6 +94,10 @@ int main(int argc, char **argv) {
     nasStatus.powerWatts=14.1; nasOnline=false; updatePower();
     if(strcmp(lv_label_get_text(power_value_label),"--") || lv_bar_get_value(power_bar)) return 10;
     nasOnline=true; updatePower();
+    updateMetric(cpu_bar,cpu_value_label,-1,true);
+    if(strcmp(lv_label_get_text(cpu_value_label),"--") || lv_bar_get_value(cpu_bar)) return 11;
+    appendChartSample(-1,-1);
+    if(ser1->points[CHART_POINT_COUNT-1]!=LV_CHART_POINT_DEF || ser2->points[CHART_POINT_COUNT-1]!=LV_CHART_POINT_DEF) return 12;
     updateMetric(cpu_bar,cpu_value_label,23,true);
     updateMetric(gpu_bar,gpu_value_label,0,true);
     updateMetric(mem_bar,mem_value_label,48,true);

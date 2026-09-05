@@ -26,6 +26,7 @@ public:
     void reset(uint32_t now)
     {
         active_ = NasRequestKind::None;
+        last_ = NasRequestKind::None;
         netDueAt_ = statusDueAt_ = now;
         startedAt_ = deadlineAt_ = now;
         netFailureStreak_ = statusFailureStreak_ = 0;
@@ -35,6 +36,8 @@ public:
     {
         if (active_ != NasRequestKind::None)
             return NasRequestKind::None;
+        if (reached(now, statusDueAt_) && last_ == NasRequestKind::Net)
+            return NasRequestKind::Status;
         if (reached(now, netDueAt_))
             return NasRequestKind::Net;
         return reached(now, statusDueAt_) ? NasRequestKind::Status : NasRequestKind::None;
@@ -42,7 +45,7 @@ public:
 
     void start(NasRequestKind kind, uint32_t now)
     {
-        active_ = kind;
+        active_ = last_ = kind;
         startedAt_ = now;
         deadlineAt_ = now + (kind == NasRequestKind::Net ? NetDeadlineMs : StatusDeadlineMs);
     }
@@ -65,6 +68,12 @@ public:
         const uint32_t maximum = active_ == NasRequestKind::Net ? NetMaxBackoffMs : StatusMaxBackoffMs;
         if (success)
         {
+            // One recovered channel is evidence that the shared transport is back.
+            if (streak)
+            {
+                if (active_ == NasRequestKind::Net && statusFailureStreak_) statusDueAt_ = now;
+                if (active_ == NasRequestKind::Status && netFailureStreak_) netDueAt_ = now;
+            }
             streak = 0;
             dueAt = startedAt_ + interval;
             if (reached(now, dueAt))
@@ -91,6 +100,7 @@ public:
     }
 
 private:
+    NasRequestKind last_ = NasRequestKind::None;
     NasRequestKind active_ = NasRequestKind::None;
     uint32_t netDueAt_ = 0;
     uint32_t statusDueAt_ = 0;

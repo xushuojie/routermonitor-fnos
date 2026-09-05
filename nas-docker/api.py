@@ -2,6 +2,8 @@
 """Small, dependency-free host metrics API for Router Monitor."""
 
 import argparse
+import hashlib
+from collections import deque
 import glob
 import math
 import shlex
@@ -69,6 +71,7 @@ def memory_status():
         "used": used,
         "available": available,
         "percent": round(used * 100 / total, 1) if total else 0.0,
+        "valid": total > 0 and "MemAvailable" in values,
     }
 
 
@@ -76,7 +79,7 @@ def uptime_seconds():
     try:
         return int(float(read_text(host_path(PROC_ROOT, "/proc/uptime")).split()[0]))
     except (IndexError, ValueError):
-        return 0
+        return None
 
 
 def valid_temperature(raw):
@@ -338,12 +341,98 @@ def network_snapshot(include_counters=False):
         return result
 
 
-def traffic_sample():
-    snapshot = network_snapshot(include_counters=True)
+def traffic_sample(provider=network_snapshot):
+    snapshot = provider(include_counters=True)
     boot_id = read_text(host_path(PROC_ROOT, "/proc/sys/kernel/random/boot_id"))
     if snapshot is None or not boot_id:
         return None
     return snapshot["iface"], snapshot["rx_bytes"], snapshot["tx_bytes"], boot_id, snapshot["counters"]
+
+
+class NetworkMonitor:
+    """One 5 Hz sampler for all clients; at most four missed points per reply."""
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.stop = threading.Event()
+        self.thread = None
+        self.samples = deque(maxlen=50)
+        self.current = None
+        self.sequence = 0
+        self.epoch = str(time.time_ns())
+        self.average = [None, None]
+        self.baseline = None
+
+    def sample(self):
+        current = network_snapshot(include_counters=True)
+        with self.lock:
+            previous = self.current
+            self.current = current
+            if current is None:
+                self.samples.clear()
+                self.baseline = None
+                self.average = [None, None]
+                return
+            same = previous and all(current[key] == previous[key]
+                                    for key in ("iface", "counter_epoch"))
+            elapsed = current["sample_time"] - previous["sample_time"] if same else 0
+            if not same or not 0 < elapsed <= 1:
+                self.epoch = str(time.time_ns())
+                self.samples.clear()
+                self.baseline = current
+                self.average = [None, None]
+                rates = [None, None]
+            else:
+                rates = [round((current[key] - previous[key]) / elapsed)
+                         for key in ("rx_bytes", "tx_bytes")]
+            self.sequence += 1
+            self.samples.append([self.sequence, round(current["sample_time"], 3), *rates])
+            span = current["sample_time"] - self.baseline["sample_time"]
+            if span >= 1:
+                self.average = [round((current[key] - self.baseline[key]) / span)
+                                for key in ("rx_bytes", "tx_bytes")]
+                self.baseline = current
+
+    def latest(self, include_counters=False):
+        with self.lock:
+            if self.current is None or time.monotonic() - self.current["sample_time"] > 1:
+                return None
+            return {key: value for key, value in self.current.items()
+                    if include_counters or key != "counters"}
+
+    def response(self, since=0, epoch=""):
+        with self.lock:
+            if self.current is None:
+                return None
+            age = time.monotonic() - self.current["sample_time"]
+            if age > 1:
+                return None
+            same = epoch == self.epoch and 0 <= since <= self.sequence
+            pending = [point for point in self.samples if point[0] > since] if same else list(self.samples)[-1:]
+            gap = not same or (pending and pending[0][0] != since + 1) or len(pending) > 4
+            return {"v": 2, "source": hashlib.sha256(self.current["iface"].encode()).hexdigest()[:16],
+                    "epoch": self.epoch, "seq": self.sequence, "age": round(age, 3),
+                    "rate": self.average, "points": pending[-4:], "gap": bool(gap)}
+
+    def run(self):
+        if self.stop.wait(.2):
+            return
+        while not self.stop.is_set():
+            started = time.monotonic()
+            try:
+                self.sample()
+            except Exception as error:
+                print(f"Network sample failed: {type(error).__name__}", flush=True)
+            self.stop.wait(max(0, .2 - (time.monotonic() - started)))
+
+    def start(self):
+        self.sample()
+        self.thread = threading.Thread(target=self.run, daemon=True, name="network-sampler")
+        self.thread.start()
+
+    def close(self):
+        self.stop.set()
+        if self.thread:
+            self.thread.join(timeout=2)
 
 
 def physical_block_names():
@@ -531,8 +620,14 @@ class UpsMonitor:
 
 
 class Metrics:
-    def __init__(self, traffic_history):
+    def __init__(self, traffic_history, network=None):
         self.traffic_history = traffic_history
+        self.monitor = network
+        self.network = network.latest if network is not None else network_snapshot
+        self.published = None
+        self.stop = threading.Event()
+        self.thread = None
+        self.sequence = 0
         self.previous_cpu = None
         self.previous_network = None
         self.previous_gpu = None
@@ -544,12 +639,13 @@ class Metrics:
         self.cached_temperatures = self.cached_storage = None
         self.ups = UpsMonitor()
 
-    def snapshot(self):
+    def snapshot(self, force=False):
         now = time.monotonic()
-        if self.cached is not None and 0 <= now - self.sampled_at < 1:
+        if not force and self.cached is not None and 0 <= now - self.sampled_at < 1:
             return {**self.cached, "traffic_24h": self.traffic_history.snapshot(), "ups": self.ups.snapshot(now)}
         current_cpu = cpu_sample()
         cpu_percent = 0.0
+        cpu_valid = False
         if current_cpu and self.previous_cpu:
             old = self.previous_cpu[0]
             # guest and guest_nice are already included in user and nice.
@@ -558,11 +654,12 @@ class Metrics:
             idle_old = old[3] + (old[4] if len(old) > 4 else 0)
             idle = idle_now - idle_old
             if total > 0:
+                cpu_valid = True
                 cpu_percent = round(max(0.0, min(100.0, (1 - idle / total) * 100)), 1)
         if current_cpu:
             self.previous_cpu = (current_cpu, now)
 
-        current_network = network_snapshot()
+        current_network = self.network()
         rx_speed = tx_speed = 0
         if current_network and self.previous_network:
             elapsed = current_network["sample_time"] - self.previous_network["sample_time"]
@@ -576,6 +673,7 @@ class Metrics:
 
         gpu_backend, gpu_value, gpu_is_cumulative = gpu_sample()
         gpu_percent = 0.0
+        gpu_valid = gpu_backend != "unavailable" and math.isfinite(gpu_value) and not gpu_is_cumulative
         if not gpu_is_cumulative:
             gpu_percent = round(max(0.0, min(100.0, gpu_value)), 1)
             self.previous_gpu = None
@@ -583,11 +681,13 @@ class Metrics:
             elapsed = now - self.previous_gpu[1]
             if elapsed > 0:
                 delta = gpu_value - self.previous_gpu[2]
+                gpu_valid = delta >= 0 and math.isfinite(delta)
                 gpu_percent = round(max(0.0, min(100.0, delta / (elapsed * 10))), 1)
         if gpu_is_cumulative:
             self.previous_gpu = (gpu_backend, now, gpu_value)
 
         disk_read_speed = disk_write_speed = 0
+        disk_valid = False
         current_disk = disk_counters()
         if current_disk:
             devices, read_bytes, write_bytes = current_disk
@@ -598,6 +698,7 @@ class Metrics:
                 old_read, old_write, old_time = self.previous_disk
                 elapsed = now - old_time
                 if elapsed > 0 and read_bytes >= old_read and write_bytes >= old_write:
+                    disk_valid = True
                     disk_read_speed = int((read_bytes - old_read) / elapsed)
                     disk_write_speed = int((write_bytes - old_write) / elapsed)
             self.previous_disk = (read_bytes, write_bytes, now)
@@ -615,8 +716,8 @@ class Metrics:
                                if sensor["type"] == kind), None) for kind in ("cpu", "disk")}
         self.cached = {
             "time": int(time.time()),
-            "cpu": {"percent": cpu_percent},
-            "gpu": {"utilization": gpu_percent, "backend": gpu_backend},
+            "cpu": {"percent": cpu_percent, "valid": cpu_valid},
+            "gpu": {"utilization": gpu_percent, "backend": gpu_backend, "valid": gpu_valid},
             "memory": memory_status(),
             "temp": self.cached_temperatures,
             "temperature_summary": summary,
@@ -629,7 +730,7 @@ class Metrics:
                 "devices": self.disk_devices,
                 "read_speed": disk_read_speed,
                 "write_speed": disk_write_speed,
-                "valid": current_disk is not None,
+                "valid": disk_valid,
             },
             "storage": self.cached_storage,
             "ups": self.ups.snapshot(now),
@@ -637,7 +738,51 @@ class Metrics:
             "traffic_24h": self.traffic_history.snapshot(),
         }
         self.sampled_at = now
+        self.sequence += 1
+        self.published = (self.cached, now, self.sequence, self.temperatures_at, self.storage_at)
         return self.cached
+
+
+    def read_snapshot(self):
+        # Readers never trigger hardware I/O. Assignment publishes a complete snapshot.
+        published = self.published
+        if published is None:
+            return None
+        cached, sampled_at, sequence, temperatures_at, storage_at = published
+        now = time.monotonic()
+        result = {**cached, "traffic_24h": self.traffic_history.snapshot(),
+                  "ups": self.ups.snapshot(now), "v": 2, "seq": sequence,
+                  "age": round(max(0, now - sampled_at), 3),
+                  "metric_age": {"temperature": round(max(0, now - temperatures_at), 1),
+                                 "storage": round(max(0, now - storage_at), 1)}}
+        if self.monitor is not None:
+            network = self.monitor.response()
+            result["net"] = {**cached["net"], "rx_speed": network["rate"][0] if network else None,
+                             "tx_speed": network["rate"][1] if network else None,
+                             "source": network["source"] if network else None,
+                             "valid": bool(network and network["rate"][0] is not None)}
+        return result
+
+    def run(self):
+        if self.stop.wait(1):
+            return
+        while not self.stop.is_set():
+            started = time.monotonic()
+            try:
+                self.snapshot(force=True)
+            except Exception as error:
+                print(f"Metrics sample failed: {type(error).__name__}", flush=True)
+            self.stop.wait(max(.01, 1 - (time.monotonic() - started)))
+
+    def start(self):
+        self.snapshot()
+        self.thread = threading.Thread(target=self.run, daemon=True, name="metrics-sampler")
+        self.thread.start()
+
+    def close(self):
+        self.stop.set()
+        if self.thread:
+            self.thread.join(timeout=2)
 
 
 def resolve_token():
@@ -646,28 +791,53 @@ def resolve_token():
     return token or os.environ.get("NAS_STATUS_TOKEN", "").strip()
 
 
-def handler_factory(metrics, token):
-    metrics_lock = threading.Lock()
+def handler_factory(metrics, token, network=None):
 
     class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def setup(self):
+            super().setup()
+            self.connection.settimeout(5)
+            self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
         def do_GET(self):
             request = urlsplit(self.path)
             path = request.path
+            query = parse_qs(request.query)
+            version2 = query.get("v") == ["2"]
             if path == "/health":
                 return self.respond(200, {"status": "ok"})
             if path not in ("/", "/status", "/net"):
                 return self.respond(404, {"error": "not found"})
             supplied = self.headers.get("Authorization", "")
             if not token or not hmac.compare_digest(supplied, "Bearer " + token):
+                self.close_connection = True
                 return self.respond(401, {"error": "unauthorized"})
             if path == "/net":
-                snapshot = network_snapshot()
+                if version2 and network is not None:
+                    try:
+                        since = int(query.get("since", ["0"])[0])
+                        if not 0 <= since <= 4294967295:
+                            raise ValueError()
+                    except ValueError:
+                        return self.respond(400, {"error": "invalid sequence"})
+                    snapshot = network.response(since, query.get("epoch", [""])[0])
+                else:
+                    snapshot = network.latest() if network is not None else network_snapshot()
                 if snapshot is None:
                     return self.respond(503, {"error": "network counters unavailable"})
                 return self.respond(200, snapshot)
-            with metrics_lock:
-                snapshot = metrics.snapshot()
-            if parse_qs(request.query).get("display") == ["1"]:
+            snapshot = metrics.read_snapshot()
+            if snapshot is None or snapshot["age"] > 3:
+                return self.respond(503, {"error": "metrics unavailable"})
+            if not version2 and snapshot["uptime"] is None:
+                snapshot["uptime"] = 0
+            metadata = {key: snapshot[key] for key in ("v", "seq", "age", "metric_age")}
+            if version2:
+                for key, field in (("cpu", "percent"), ("gpu", "utilization"), ("memory", "percent")):
+                    snapshot[key] = {**snapshot[key], field: snapshot[key][field] if snapshot[key]["valid"] else None}
+            if query.get("display") == ["1"]:
                 fields = {
                     "cpu": ("percent",), "gpu": ("utilization",), "memory": ("percent",),
                     "traffic_24h": ("rx_bytes", "tx_bytes", "coverage_seconds", "valid"),
@@ -678,6 +848,8 @@ def handler_factory(metrics, token):
                 snapshot = {**{key: {field: snapshot[key][field] for field in names}
                                for key, names in fields.items()},
                             "uptime": snapshot["uptime"], "temperature_summary": snapshot["temperature_summary"]}
+            if version2:
+                snapshot.update(metadata)
             return self.respond(200, snapshot)
 
         def respond(self, status, payload):
@@ -686,6 +858,8 @@ def handler_factory(metrics, token):
             self.send_header("Content-Type", "application/json")
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
+            if self.close_connection:
+                self.send_header("Connection", "close")
             self.end_headers()
             self.wfile.write(body)
 
@@ -705,20 +879,26 @@ def main():
     token = resolve_token()
     if not token:
         raise SystemExit("NAS_STATUS_TOKEN or NAS_STATUS_TOKEN_FILE is required")
-    history = TrafficHistory(os.environ.get("NAS_STATUS_HISTORY_DB", DEFAULT_HISTORY_DB), traffic_sample)
+    network = NetworkMonitor()
+    history = TrafficHistory(os.environ.get("NAS_STATUS_HISTORY_DB", DEFAULT_HISTORY_DB),
+                             lambda: traffic_sample(network.latest))
     if history.previous and history.previous[5]:
         _network_previous = history.previous[5]["values"]
         _network_epoch = int(history.previous[5]["epoch"])
-    metrics = Metrics(history)
-    server = ThreadingHTTPServer(("0.0.0.0", args.port), handler_factory(metrics, token))
+    network.start()
+    metrics = Metrics(history, network)
+    server = ThreadingHTTPServer(("0.0.0.0", args.port), handler_factory(metrics, token, network))
     metrics.ups.start()
     history.start()
+    metrics.start()
     print(f"NAS status API listening on :{args.port}, interface={CONFIGURED_IFACE}", flush=True)
     try:
         server.serve_forever()
     finally:
         server.server_close()
+        metrics.close()
         history.close()
+        network.close()
         metrics.ups.close()
 
 
