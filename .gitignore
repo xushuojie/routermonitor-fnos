@@ -19,3 +19,8 @@ Thumbs.db
 
 test/
 ui-design/
+android/build/
+!android/test/
+!android/test/**
+*.keystore
+*.jks
