@@ -151,7 +151,7 @@ static void serviceWiFi()
         startedAt = millis();
         WiFi.persistent(false);
         WiFi.mode(WIFI_STA);
-        WiFi.setSleepMode(WIFI_NONE_SLEEP);
+        WiFi.setSleepMode(WIFI_MODEM_SLEEP);
         WiFi.setAutoReconnect(true);
 #ifdef MONITOR_WIFI_RECOVERY_TEST
         WiFi.begin("RouterMonitor-recovery-test-unavailable");
@@ -1100,4 +1100,5 @@ void loop()
     pollNasRequests();
     handleConfigPortal();
     lv_task_handler(); /* let the GUI do its work */
+    delay(1); // Give the SDK idle time so modem sleep can take effect between requests.
 }
