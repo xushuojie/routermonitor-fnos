@@ -443,15 +443,17 @@ def ups_status():
     if len(paths) != 1:
         return invalid
     try:
-        deadline = time.monotonic() + 0.2
+        deadline = time.monotonic() + 1.0
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-            client.settimeout(0.2)
+            client.settimeout(1.0)
             client.connect(paths[0])
             client.sendall(b"DUMPALL\n")
             data = b""
             while b"DUMPDONE\n" not in data:
                 remaining = deadline - time.monotonic()
-                if remaining <= 0 or len(data) >= 32768:
+                if remaining <= 0:
+                    return {**invalid, "reason": "timeout"}
+                if len(data) >= 32768:
                     return invalid
                 client.settimeout(remaining)
                 chunk = client.recv(min(4096, 32768 - len(data)))
@@ -482,8 +484,50 @@ def ups_status():
             return invalid
         return {"watts": round(watts, 1), "valid": True, "source": source,
                 "status": values.get("ups.status", ""), "alarm": values.get("ups.alarm", "")}
+    except socket.timeout:
+        return {**invalid, "reason": "timeout"}
     except (OSError, ValueError, KeyError, UnicodeError):
         return invalid
+
+
+class UpsMonitor:
+    """Keep USB-driver waits outside HTTP; expire briefly retained samples."""
+    def __init__(self):
+        self.value = {"watts": None, "valid": False, "source": "unavailable"}
+        self.sampled_at = 0
+        self.lock = threading.Lock()
+        self.stop = threading.Event()
+        self.thread = None
+
+    def sample(self):
+        value = ups_status()
+        with self.lock:
+            if value["valid"]:
+                self.value, self.sampled_at = value, time.monotonic()
+            elif value.get("reason") != "timeout":
+                self.value = value
+
+    def snapshot(self, now):
+        with self.lock:
+            age = max(0, now - self.sampled_at)
+            if self.value["valid"] and age >= 6:
+                return {"watts": None, "valid": False, "source": "unavailable", "reason": "expired"}
+            return {**self.value, "age_seconds": round(age, 1) if self.value["valid"] else None}
+
+    def run(self):
+        while not self.stop.is_set():
+            started = time.monotonic()
+            self.sample()
+            self.stop.wait(max(0, 2 - (time.monotonic() - started)))
+
+    def start(self):
+        self.thread = threading.Thread(target=self.run, daemon=True, name="ups-sampler")
+        self.thread.start()
+
+    def close(self):
+        self.stop.set()
+        if self.thread:
+            self.thread.join(timeout=2)
 
 
 class Metrics:
@@ -498,13 +542,12 @@ class Metrics:
         self.cached = None
         self.sampled_at = self.temperatures_at = self.storage_at = 0
         self.cached_temperatures = self.cached_storage = None
-        self.cached_ups = None
-        self.ups_at = 0
+        self.ups = UpsMonitor()
 
     def snapshot(self):
         now = time.monotonic()
         if self.cached is not None and 0 <= now - self.sampled_at < 1:
-            return {**self.cached, "traffic_24h": self.traffic_history.snapshot()}
+            return {**self.cached, "traffic_24h": self.traffic_history.snapshot(), "ups": self.ups.snapshot(now)}
         current_cpu = cpu_sample()
         cpu_percent = 0.0
         if current_cpu and self.previous_cpu:
@@ -568,9 +611,6 @@ class Metrics:
         if self.cached_storage is None or now - self.storage_at >= 30:
             self.cached_storage = storage_status()
             self.storage_at = now
-        if self.cached_ups is None or now - self.ups_at >= 2:
-            self.cached_ups = ups_status()
-            self.ups_at = now
         summary = {kind: next((sensor["temp"] for sensor in self.cached_temperatures
                                if sensor["type"] == kind), None) for kind in ("cpu", "disk")}
         self.cached = {
@@ -592,7 +632,7 @@ class Metrics:
                 "valid": current_disk is not None,
             },
             "storage": self.cached_storage,
-            "ups": self.cached_ups,
+            "ups": self.ups.snapshot(now),
             "uptime": uptime_seconds(),
             "traffic_24h": self.traffic_history.snapshot(),
         }
@@ -669,7 +709,9 @@ def main():
     if history.previous and history.previous[5]:
         _network_previous = history.previous[5]["values"]
         _network_epoch = int(history.previous[5]["epoch"])
-    server = ThreadingHTTPServer(("0.0.0.0", args.port), handler_factory(Metrics(history), token))
+    metrics = Metrics(history)
+    server = ThreadingHTTPServer(("0.0.0.0", args.port), handler_factory(metrics, token))
+    metrics.ups.start()
     history.start()
     print(f"NAS status API listening on :{args.port}, interface={CONFIGURED_IFACE}", flush=True)
     try:
@@ -677,6 +719,7 @@ def main():
     finally:
         server.server_close()
         history.close()
+        metrics.ups.close()
 
 
 if __name__ == "__main__":

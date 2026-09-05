@@ -169,4 +169,4 @@ Compose 只读挂载 `/proc`、`/sys`、debugfs、smartd 日志和 `/vol1`、`/v
 
 `/status` 新增 `ups: {watts, valid, source, status, alarm}`，展示投影只包含 `ups.watts`。优先使用驱动提供的 `ups.realpower` / `output.realpower`；仅已验证的 `WL W120` 直流型号允许用输出电压×电流计算瓦数，source 为 `dc_voltage_current`，其他无瓦数的型号返回不可用，避免将交流视在功率当作有功功率。原始告警保留，不把已知 W120 电池误报过滤成“保护正常”。
 
-读取结果缓存 2 秒，单次读取总时限 200ms、最大 32KiB；socket 断开、超时、DATASTALE、非有限数或异常数值返回 null，屏幕显示 `-- W`。网络 `/net` 采样路径独立。当前展示支持 0–999W，0–35W 为进度条量程，35W 不是危险阈值。
+后台线程每 2 秒采样，单次读取总时限 1 秒、最大 32KiB，HTTP 只读取快照、不等待 UPS。短暂超时保留最近有效读数，满 6 秒没有新有效读数则返回 null；socket 断开、DATASTALE、非有限数或异常数值立即返回不可用，屏幕显示 `-- W`。完整响应附带 `age_seconds`。网络 `/net` 采样路径独立。当前展示支持 0–999W，0–35W 为进度条量程，35W 不是危险阈值。
