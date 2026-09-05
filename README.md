@@ -1,5 +1,7 @@
 # Router Monitor for FNOS NAS
 
+![ESP8266 NAS 监控小电视实拍](images/device-photo.png)
+
 **飞牛 / Linux NAS 网页控制台 + ESP8266 桌面监控屏**
 
 [快速部署](#1-部署-nas-服务) · [网页控制台](#打开-nas-网页控制台) · [屏幕与烧录](#2-编译和烧录固件) · [服务端完整说明](nas-docker/README.md)
