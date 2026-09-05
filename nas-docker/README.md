@@ -30,7 +30,7 @@ curl -H "Authorization: Bearer $NAS_STATUS_TOKEN" http://127.0.0.1:18199/net
 
 默认仅接受局域网 / 回环来源通过 IP 地址访问管理网页；域名入口需显式配置。此检查不能代替防火墙：FRP 或反向代理可能把公网连接转成内网来源。
 
-**不要将 Python 服务的 18199 端口直接通过路由器或 FRP 映射到公网。** 公网使用受支持的 HTTPS 反向代理，设备仍通过 LAN 访问原端口：
+推荐不要将 Python 服务的 18199 端口直接通过路由器或 FRP 映射到公网。公网首选受支持的 HTTPS 反向代理，设备仍通过 LAN 访问原端口：
 
 1. 为域名配置有效 TLS 证书，参考 [Nginx 配置模板](public-nginx.conf.example)。代理必须覆盖 `Host` 与 `X-Forwarded-Proto`，并设置连接、请求大小、超时及登录限速。
 2. 在 `.env` 设置 `NAS_STATUS_PUBLIC_ORIGIN=https://nas.example.com`，不含路径；设置 `NAS_STATUS_TRUSTED_PROXIES` 为代理连接后端时的**实际来源 IP**，逗号分隔，不填写访客 IP 或整个网段。代理直接运行在 NAS 上可用 `127.0.0.1`；桥接容器应固定 IP 后填写该地址。
@@ -40,6 +40,8 @@ curl -H "Authorization: Bearer $NAS_STATUS_TOKEN" http://127.0.0.1:18199/net
 
 服务不信任 `X-Forwarded-For`，限速按实际 TCP 来源执行。应用限制为 32 个同时连接、5 秒 socket 空闲超时；密码哈希校验串行且非阻塞准入，登录有每来源与全局预算。慢速连接仍会占用有限容量，应用限制不是抗 DDoS 防护，公网必须由代理承担入口保护。
 
+如果明确接受 HTTP 风险，也可以配置 `NAS_STATUS_PUBLIC_ORIGIN=http://公网IP:端口`，并将 `NAS_STATUS_TRUSTED_PROXIES` 设为 FRP 客户端连接服务时的实际来源 IP。HTTP 下 Cookie 不设置 `Secure`，登录密码、会话 Cookie 和 ESP Token 都可能被链路上的第三方窃取或篡改；应用鉴权和限速无法消除这一风险。FRP 的 `localIP` 应指向 NAS 的固定局域网 IP，不能依赖已切换到 host 网络的容器名。
+
 安全回归检查涵盖未登录权限、ESP Token 与管理权限隔离、CSRF、伪造 Host / 代理头、Secure Cookie、登录预算、嵌套 JSON、歧义 HTTP 请求、非 ASCII 鉴权头与连接容量恢复：
 
 ```bash
@@ -47,6 +49,12 @@ python3 -m unittest discover -s nas-docker -p 'test_security.py' -v
 ```
 
 实现依据：[Python HTTP 服务安全边界](https://docs.python.org/3/library/http.server.html)、[OWASP 会话管理](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html)。这些检查不代表完整渗透测试，也不能证明所有公网部署路径均安全。
+
+#### 公网验收记录（2026-09-05）
+
+在明确启用 HTTP 的 FRP 部署上，30 项公网检查通过：匿名读取受保护数据返回 401，未授权写入与伪造来源返回 403，敏感文件路径返回 404，歧义请求与异常 JSON 返回 400。实际浏览器登录页正常加载，匿名会话无管理内容、无脚本错误。错误登录连续 8 次后，第 9 次返回 429，一分钟后自动恢复；限速期间健康检查与 ESP 请求正常。
+
+本地 25 项回归测试通过，包含正确密码登录、会话、CSRF 和 HTTP / HTTPS 配置边界。本轮公网测试没有管理员当前密码，未执行真实账户登录后的管理写入；未进行压力测试或完整渗透测试。
 
 打开 `http://NAS局域网IP:18199/`，使用独立管理员密码登录。未设置 `NAS_STATUS_ADMIN_PASSWORD` 时，首次启动自动生成密码并写入数据目录 `initial-admin-password.txt`（权限 600）；仓库模板读取命令：
 

@@ -34,8 +34,8 @@ class WebApp:
         if self.public_origin:
             origin = urlsplit(self.public_origin)
             origin.port  # Validate the configured port before opening the server.
-            if origin.scheme != 'https' or not origin.hostname or origin.username or origin.password or origin.path or origin.query or origin.fragment or not self.trusted_proxies:
-                raise ValueError('Public GUI requires an HTTPS origin and exact trusted proxy IP addresses')
+            if origin.scheme not in ('http', 'https') or not origin.hostname or origin.username or origin.password or origin.path or origin.query or origin.fragment or not self.trusted_proxies:
+                raise ValueError('Public GUI requires an HTTP(S) origin and exact trusted proxy IP addresses')
         self.last_device_at = 0
         self.device_address = ''
         if not self.password_path.exists():
@@ -69,9 +69,10 @@ class WebApp:
             peer = ipaddress.ip_address(handler.client_address[0])
             host = handler.headers.get('Host', '')
             if self.public_origin:
-                return (peer in self.trusted_proxies and
-                        host == urlsplit(self.public_origin).netloc and
-                        handler.headers.get_all('X-Forwarded-Proto') == ['https'])
+                origin = urlsplit(self.public_origin)
+                forwarded = handler.headers.get_all('X-Forwarded-Proto') or []
+                return (peer in self.trusted_proxies and host == origin.netloc and
+                        (forwarded == [origin.scheme] if origin.scheme == 'https' else not forwarded))
             address = urlsplit('http://' + host)
             if address.username or address.password or address.path or address.query or address.fragment:
                 return False
@@ -83,7 +84,7 @@ class WebApp:
 
     def cookie(self, sid='', age=0):
         return ('nas_admin=' + sid + '; HttpOnly; SameSite=Strict; Path=/; Max-Age=' + str(age)
-                + ('; Secure' if self.public_origin else ''))
+                + ('; Secure' if self.public_origin.startswith('https://') else ''))
 
     def device_seen(self, address):
         self.last_device_at, self.device_address = time.monotonic(), address
@@ -119,7 +120,7 @@ class WebApp:
         handler.send_header('X-Content-Type-Options', 'nosniff')
         handler.send_header('Referrer-Policy', 'no-referrer')
         handler.send_header('X-Frame-Options', 'DENY')
-        if self.public_origin:
+        if self.public_origin.startswith('https://'):
             handler.send_header('Strict-Transport-Security', 'max-age=31536000')
         handler.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
         if cookie:

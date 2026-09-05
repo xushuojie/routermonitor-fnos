@@ -58,6 +58,17 @@ class SecurityTests(unittest.TestCase):
         headers['Origin'] = 'http://nas.example.com'
         self.assertEqual(self.request('/api/login', 'POST', '{}', **headers)[0], 403)
 
+    def test_explicit_public_http_origin(self):
+        self.app.public_origin = 'http://198.51.100.10:18199'
+        self.app.trusted_proxies = {ipaddress.ip_address('127.0.0.1')}
+        headers = {'Host': '198.51.100.10:18199', 'Origin': self.app.public_origin,
+                   'Content-Type': 'application/json'}
+        status, response, _ = self.request('/api/login', 'POST', json.dumps({'password': 'test-password-only-123'}), **headers)
+        self.assertEqual(status, 200)
+        self.assertNotIn('; Secure', response['Set-Cookie'])
+        self.assertNotIn('Strict-Transport-Security', response)
+        self.assertEqual(self.request('/', Host='198.51.100.10:18199', **{'X-Forwarded-Proto': 'http'})[0], 403)
+
     def test_login_budget_and_malformed_json(self):
         headers = {'Origin': self.origin, 'Content-Type': 'application/json'}
         self.assertEqual(self.request('/api/login', 'POST', '{"password":' + '[' * 1500 + '0' + ']' * 1500 + '}', **headers)[0], 400)

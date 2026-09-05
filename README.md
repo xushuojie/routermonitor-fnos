@@ -229,7 +229,7 @@ UPS 功率版本验收（2026-09-05）：14 项服务端测试、布局/功率�
 
 ## 安全说明
 
-公网请按[HTTPS 部署说明](nas-docker/README.md#公网访问与安全边界)配置固定域名、可信代理和入口限速，并关闭原始 18199 公网映射。公网模式管理 Cookie 使用 `Secure`，ESP 继续使用局域网 API。
+公网首选按[HTTPS 部署说明](nas-docker/README.md#公网访问与安全边界)配置固定域名、可信代理和入口限速，并关闭原始 18199 公网映射。HTTPS 模式管理 Cookie 使用 `Secure`；显式 HTTP 模式的配置与限制见同一说明。ESP 继续使用局域网 API。
 
 - `.env`、Token、固件二进制和 PlatformIO 缓存已被 `.gitignore` 排除
 - API 启动时强制要求 Token
