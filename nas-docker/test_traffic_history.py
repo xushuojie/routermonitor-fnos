@@ -1,6 +1,7 @@
 """Run with: python3 -m unittest discover -s nas-docker -p 'test_*.py'."""
 
 import tempfile
+import sqlite3
 import threading
 import unittest
 from pathlib import Path
@@ -92,6 +93,54 @@ class TrafficHistoryTests(unittest.TestCase):
             with patch("traffic_history.SAMPLE_SECONDS", 0.01):
                 history.start()
                 self.assertTrue(sampled.wait(1), "background sampling stopped without HTTP requests")
+            history.close()
+
+    def test_legacy_migration_per_interface_resets_restart_and_cached_totals(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = str(Path(directory) / "traffic.sqlite3")
+            with sqlite3.connect(db_path) as old_db:
+                old_db.executescript("""
+                    CREATE TABLE intervals (end REAL PRIMARY KEY, start REAL NOT NULL,
+                                            iface TEXT NOT NULL, rx INTEGER NOT NULL, tx INTEGER NOT NULL);
+                    CREATE TABLE baseline (id INTEGER PRIMARY KEY CHECK (id = 1), ts REAL NOT NULL,
+                                           iface TEXT NOT NULL, rx INTEGER NOT NULL, tx INTEGER NOT NULL,
+                                           boot_id TEXT NOT NULL);
+                    INSERT INTO intervals VALUES (5, 0, 'physical:eth0,eth1', 100, 100);
+                    INSERT INTO baseline VALUES (1, 5, 'physical:eth0,eth1', 2000, 2000, 'boot');
+                """)
+
+            def sample(first, second, epoch="100"):
+                return ("physical:eth0,eth1", first + second, first + second, "boot",
+                        {"epoch": epoch, "values": {"eth0": [first, first], "eth1": [second, second]}})
+
+            history = TrafficHistory(db_path, lambda: None)
+            self.assertEqual(history.db.execute("SELECT COUNT(*) FROM intervals").fetchone()[0], 1)
+            history._record(sample(1000, 1000), 10)
+            self.assertEqual(history.db.execute("SELECT COUNT(*) FROM intervals").fetchone()[0], 1)
+            history._record(sample(1100, 1100), 15)
+            history.close()
+            history = TrafficHistory(db_path, lambda: None)
+            self.assertEqual(history.previous[5], sample(1100, 1100)[4])
+            history._record(sample(1200, 1200), 20)
+            # Even a constant epoch cannot hide a reset beneath increasing totals.
+            history._record(sample(0, 3000), 25)
+            history._record(sample(100, 3100), 30)
+            # A faster /net read can detect a reset and recovery between history samples.
+            history._record(sample(200, 3200, "101"), 35)
+            history._record(sample(300, 3300, "101"), 40)
+            queries = []
+            history.db.set_trace_callback(queries.append)
+            with patch("traffic_history.time.time", return_value=40):
+                for _ in range(3):
+                    result = history.snapshot()
+                    self.assertEqual((result["rx_bytes"], result["coverage_seconds"]), (900, 25))
+            with patch("traffic_history.time.time", return_value=51):
+                self.assertFalse(history.snapshot()["valid"])
+            self.assertEqual(sum("SELECT SUM" in query for query in queries), 1)
+            history._record(sample(400, 3400, "101"), 45)
+            with patch("traffic_history.time.time", return_value=45):
+                self.assertEqual(history.snapshot()["rx_bytes"], 1100)
+            self.assertEqual(sum("SELECT SUM" in query for query in queries), 2)
             history.close()
 
 

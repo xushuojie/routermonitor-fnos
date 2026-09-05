@@ -19,12 +19,15 @@ def main():
 #include <cmath>
 #include <cstring>
 
-static NasNetSample sample(double time, double rx, double tx, const char *iface = "physical:enp2s0,enp3s0") {
+static NasNetSample sample(double time, double rx, double tx,
+                           const char *iface = "physical:enp2s0,enp3s0",
+                           const char *epoch = "100") {
     NasNetSample value;
     value.sampleTime = time;
     value.rxBytes = rx;
     value.txBytes = tx;
     std::strcpy(value.iface, iface);
+    std::strcpy(value.counterEpoch, epoch);
     return value;
 }
 
@@ -37,6 +40,12 @@ int main() {
     assert(!calculateNetRate(first, sample(100.0, 1.0e12 + 1, 2.0e12 + 1), rate));
     assert(!calculateNetRate(first, sample(100.2, 1, 2.0e12 + 1), rate));
     assert(!calculateNetRate(first, sample(100.2, 1.0e12 + 1, 2.0e12 + 1, "enp3s0"), rate));
+    assert(!calculateNetRate(first, sample(100.2, 1.0e12 + 1, 2.0e12 + 1,
+                                                 "physical:enp2s0,enp3s0", "101"), rate));
+    assert(!calculateNetRate(first, sample(100.2, 1.0e12 + 1, 2.0e12 + 1,
+                                                 "physical:enp2s0,enp3s0", ""), rate));
+    const NasNetSample legacy = sample(100.0, 10, 20, "eth0", "");
+    assert(calculateNetRate(legacy, sample(100.2, 20, 30, "eth0", ""), rate));
 }
 '''
     with tempfile.TemporaryDirectory() as directory:
@@ -45,7 +54,7 @@ int main() {
         cpp.write_text(source)
         subprocess.run([compiler, "-std=c++11", "-I", str(ROOT / "src"), str(cpp), "-o", str(binary)], check=True)
         subprocess.run([str(binary)], check=True)
-    print("PASS: server-time deltas, terabyte counters, reset and interface changes")
+    print("PASS: deltas, large counters, reset, interface and counter epoch changes")
 
 
 if __name__ == "__main__":

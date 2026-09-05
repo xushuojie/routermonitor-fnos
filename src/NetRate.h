@@ -10,6 +10,7 @@ struct NasNetSample
     double rxBytes = 0;
     double txBytes = 0;
     char iface[65] = {0};
+    char counterEpoch[33] = {0};
 };
 
 struct NetRate
@@ -23,6 +24,8 @@ inline bool calculateNetRate(const NasNetSample &previous, const NasNetSample &c
 {
     const double elapsed = current.sampleTime - previous.sampleTime;
     if (!previous.iface[0] || strcmp(previous.iface, current.iface) != 0 ||
+        ((previous.counterEpoch[0] || current.counterEpoch[0]) &&
+         strcmp(previous.counterEpoch, current.counterEpoch) != 0) ||
         !isfinite(elapsed) || elapsed <= 0 ||
         !isfinite(previous.rxBytes) || !isfinite(previous.txBytes) ||
         !isfinite(current.rxBytes) || !isfinite(current.txBytes) ||

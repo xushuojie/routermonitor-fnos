@@ -27,6 +27,8 @@ class DetectionTests(unittest.TestCase):
         api.SMART_ROOT = str(self.root / "smartmontools")
         api.SMART_MAX_AGE_SECONDS = 7200
         api._smart_temperature_cache.clear()
+        api._network_previous.clear()
+        api._network_epoch = 100
 
     def tearDown(self):
         self.temp.cleanup()
@@ -63,13 +65,13 @@ class DetectionTests(unittest.TestCase):
         self.write("/proc/sys/kernel/random/boot_id", "test-boot")
         self.assertEqual(api.selected_network_interfaces(),
                          ("physical:enp2s0,enp3s0", ["enp2s0", "enp3s0"]))
-        self.assertEqual(api.traffic_sample(),
+        self.assertEqual(api.traffic_sample()[:4],
                          ("physical:enp2s0,enp3s0", 400, 600, "test-boot"))
 
         history = Mock()
         history.snapshot.return_value = {}
         metrics = api.Metrics(history)
-        with patch.object(api.time, "monotonic", side_effect=(10, 20)):
+        with patch.object(api.time, "monotonic", side_effect=(10, 10, 20, 20)):
             self.assertEqual(metrics.snapshot()["net"]["rx_speed"], 0)
             self.write("/sys/class/net/enp2s0/statistics/rx_bytes", 130)
             self.write("/sys/class/net/enp2s0/statistics/tx_bytes", 240)
@@ -83,7 +85,7 @@ class DetectionTests(unittest.TestCase):
         self.assertIsNone(api.traffic_sample())
 
         api.CONFIGURED_IFACE = "br0"
-        self.assertEqual(api.traffic_sample(), ("br0", 9000, 9000, "test-boot"))
+        self.assertEqual(api.traffic_sample()[:4], ("br0", 9000, 9000, "test-boot"))
 
     def test_net_endpoint_is_authenticated_lightweight_and_fails_as_a_unit(self):
         api.CONFIGURED_IFACE = "physical"
@@ -106,6 +108,7 @@ class DetectionTests(unittest.TestCase):
                     "iface": "physical:enp2s0,enp3s0",
                     "rx_bytes": 400,
                     "tx_bytes": 600,
+                    "counter_epoch": "100",
                 })
             metrics.snapshot.assert_not_called()
 
@@ -129,7 +132,7 @@ class DetectionTests(unittest.TestCase):
         self.write("/proc/sys/kernel/random/boot_id", "test-boot")
         self.write("/sys/class/drm/card0/device/gpu_busy_percent", "37")
         self.assertEqual(api.detect_network_interface(), "enp2s0")
-        self.assertEqual(api.traffic_sample(), ("enp2s0", 100, 200, "test-boot"))
+        self.assertEqual(api.traffic_sample()[:4], ("enp2s0", 100, 200, "test-boot"))
         self.assertEqual(api.gpu_sample(), ("amdgpu", 37.0, False))
         history = Mock()
         history.snapshot.return_value = {"rx_bytes": 300, "tx_bytes": 400, "valid": True}
@@ -218,6 +221,100 @@ class DetectionTests(unittest.TestCase):
                 "valid": True,
                 "filesystems": 2,
             })
+
+    def test_single_interface_reset_changes_epoch_even_when_totals_increase(self):
+        api.CONFIGURED_IFACE = "physical"
+        self.physical_interface("eth0", 1000, 1000)
+        self.physical_interface("eth1", 1000, 1000)
+        first = api.network_snapshot()
+        self.write("/sys/class/net/eth0/statistics/rx_bytes", 0)
+        self.write("/sys/class/net/eth1/statistics/rx_bytes", 3000)
+        reset = api.network_snapshot()
+        self.assertGreater(reset["rx_bytes"], first["rx_bytes"])
+        self.assertNotEqual(reset["counter_epoch"], first["counter_epoch"])
+        self.assertEqual(api.network_snapshot()["counter_epoch"], reset["counter_epoch"])
+        (self.root / "sys/class/net/eth0/statistics/tx_bytes").unlink()
+        self.assertIsNone(api.network_snapshot())
+        self.write("/sys/class/net/eth0/statistics/tx_bytes", 1000)
+        self.assertNotEqual(api.network_snapshot()["counter_epoch"], reset["counter_epoch"])
+
+    def test_cpu_guest_caches_and_bounded_display_response(self):
+        clock = [10.0]
+        sensors = [{"type": "cpu", "temp": 55}, {"type": "disk", "temp": 40}]
+        sensors += [{"type": f"coretemp:Core {index}", "temp": 50} for index in range(200)]
+        history = Mock()
+        history.snapshot.return_value = {"rx_bytes": 100, "tx_bytes": 200,
+                                         "coverage_seconds": 5, "valid": True, "iface": "physical:eth0"}
+        with patch.object(api.time, "monotonic", side_effect=lambda: clock[0]), \
+             patch.object(api, "cpu_sample", side_effect=lambda: [int(clock[0] * 10), 0, 0,
+                                                                  int(clock[0] * 10), 0, 0, 0, 0,
+                                                                  int(clock[0] * 10), 0]) as cpu, \
+             patch.object(api, "network_snapshot", return_value=None), \
+             patch.object(api, "temperatures", return_value=sensors) as temperature, \
+             patch.object(api, "storage_status", return_value={"total": 1000, "used": 500,
+                                                               "percent": 50, "valid": True,
+                                                               "filesystems": 1}) as storage:
+            metrics = api.Metrics(history)
+            metrics.snapshot()
+            clock[0] = 10.2
+            metrics.snapshot()
+            self.assertEqual(cpu.call_count, 1)
+            clock[0] = 11
+            self.assertEqual(metrics.snapshot()["cpu"]["percent"], 50)
+            clock[0] = 14
+            metrics.snapshot()
+            self.assertEqual((temperature.call_count, storage.call_count), (1, 1))
+            clock[0] = 15
+            metrics.snapshot()
+            self.assertEqual((temperature.call_count, storage.call_count), (2, 1))
+            clock[0] = 40
+            metrics.snapshot()
+            self.assertEqual((temperature.call_count, storage.call_count), (3, 2))
+            server = api.ThreadingHTTPServer(("127.0.0.1", 0), api.handler_factory(metrics, "secret"))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
+            try:
+                connection.request("GET", "/status?display=1", headers={"Authorization": "Bearer secret"})
+                response = connection.getresponse()
+                body = response.read()
+                self.assertEqual(response.status, 200)
+                self.assertEqual(int(response.getheader("Content-Length")), len(body))
+                self.assertLess(len(body), 1024)
+                display = json.loads(body)
+                self.assertEqual(display["temperature_summary"], {"cpu": 55, "disk": 40})
+                self.assertNotIn("temp", display)
+                self.assertNotIn("iface", display["traffic_24h"])
+                connection.request("GET", "/status", headers={"Authorization": "Bearer secret"})
+                self.assertEqual(len(json.loads(connection.getresponse().read())["temp"]), 202)
+            finally:
+                connection.close()
+                server.shutdown()
+                server.server_close()
+                thread.join()
+
+    def test_main_restores_persisted_network_baseline_on_short_restart(self):
+        api.CONFIGURED_IFACE = "physical"
+        self.physical_interface("eth0", 1000, 1000)
+        self.physical_interface("eth1", 1000, 1000)
+        self.write("/proc/sys/kernel/random/boot_id", "boot")
+        db_path = str(self.root / "traffic.sqlite3")
+        history = api.TrafficHistory(db_path, api.traffic_sample)
+        history._record(api.traffic_sample(), 10)
+        history.close()
+        api._network_previous = {}
+        api._network_epoch = 999
+        self.write("/sys/class/net/eth0/statistics/rx_bytes", 1100)
+        self.write("/sys/class/net/eth1/statistics/rx_bytes", 1100)
+        with patch.dict(os.environ, {"NAS_STATUS_HISTORY_DB": db_path}), \
+             patch("sys.argv", ["api.py"]), patch.object(api.time, "time", return_value=15), \
+             patch.object(api, "resolve_token", return_value="secret"), \
+             patch.object(api, "ThreadingHTTPServer"):
+            api.main()
+            self.assertEqual(api._network_epoch, 100)
+            history = api.TrafficHistory(db_path, api.traffic_sample)
+            self.assertEqual(history.db.execute("SELECT rx FROM intervals").fetchall(), [(200,)])
+            history.close()
 
 
 if __name__ == "__main__":

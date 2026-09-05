@@ -1,5 +1,6 @@
 """Persistent rolling traffic totals from host interface byte counters."""
 
+import json
 import logging
 import os
 import sqlite3
@@ -30,9 +31,14 @@ class TrafficHistory:
                 tx INTEGER NOT NULL, boot_id TEXT NOT NULL
             );
         """)
-        self.previous = self.db.execute("SELECT ts, iface, rx, tx, boot_id FROM baseline").fetchone()
+        if "counters" not in {row[1] for row in self.db.execute("PRAGMA table_info(baseline)")}:
+            self.db.execute("ALTER TABLE baseline ADD COLUMN counters TEXT")
+        self.previous = self.db.execute("SELECT ts, iface, rx, tx, boot_id, counters FROM baseline").fetchone()
+        if self.previous:
+            self.previous = (*self.previous[:5], json.loads(self.previous[5]) if self.previous[5] else None)
         self.latest = self.previous
         self.healthy = False
+        self.totals = None
 
     def start(self):
         if self.thread is None:
@@ -55,7 +61,7 @@ class TrafficHistory:
         try:
             sample = self.sample_fn()
             if sample is not None:
-                iface, rx, tx, boot_id = sample
+                iface, rx, tx, boot_id = sample[:4]
                 if not iface or not boot_id or not isinstance(rx, int) or not isinstance(tx, int) or min(rx, tx) < 0:
                     raise ValueError("Traffic sample needs an interface, boot ID and nonnegative integer counters")
         except Exception:
@@ -68,30 +74,40 @@ class TrafficHistory:
             with self.lock:
                 self.healthy = False
                 self.previous = None
+                self.totals = None
 
     def _record(self, sample, now):
         with self.lock, self.db:
+            self.totals = None
             self.db.execute("DELETE FROM intervals WHERE end <= ?", (now - WINDOW_SECONDS,))
             if sample is None:
                 self.db.execute("DELETE FROM baseline")
                 self.previous = None
                 self.healthy = False
                 return
-            iface, rx, tx, boot_id = sample
+            iface, rx, tx, boot_id = sample[:4]
+            counters = sample[4] if len(sample) > 4 else None
             previous = self.previous
             last_end = self.db.execute("SELECT MAX(end) FROM intervals").fetchone()[0]
             if (self.latest and now < self.latest[0]) or (last_end is not None and now < last_end):
                 # Wall-clock rollback makes interval placement ambiguous.
                 self.db.execute("DELETE FROM intervals")
             elif previous:
-                ts, old_iface, old_rx, old_tx, old_boot = previous
+                ts, old_iface, old_rx, old_tx, old_boot, old_counters = previous
+                counters_valid = counters is None and old_counters is None
+                if counters and old_counters:
+                    values, old_values = counters["values"], old_counters["values"]
+                    counters_valid = (counters["epoch"] == old_counters["epoch"]
+                                      and values.keys() == old_values.keys()
+                                      and all(value >= old for name, pair in values.items()
+                                              for value, old in zip(pair, old_values[name])))
                 if (0 < now - ts <= MAX_GAP_SECONDS and iface == old_iface
-                        and boot_id == old_boot and rx >= old_rx and tx >= old_tx):
+                        and boot_id == old_boot and rx >= old_rx and tx >= old_tx and counters_valid):
                     self.db.execute("INSERT INTO intervals VALUES (?, ?, ?, ?, ?)",
                                     (now, ts, iface, rx - old_rx, tx - old_tx))
-            self.db.execute("INSERT OR REPLACE INTO baseline VALUES (1, ?, ?, ?, ?, ?)",
-                            (now, iface, rx, tx, boot_id))
-            self.previous = self.latest = (now, iface, rx, tx, boot_id)
+            self.db.execute("INSERT OR REPLACE INTO baseline VALUES (1, ?, ?, ?, ?, ?, ?)",
+                            (now, iface, rx, tx, boot_id, json.dumps(counters) if counters else None))
+            self.previous = self.latest = (now, iface, rx, tx, boot_id, counters)
             self.healthy = True
 
     def snapshot(self):
@@ -109,13 +125,15 @@ class TrafficHistory:
             end = self.latest[0]
             # ponytail: uniform traffic within the boundary bucket; use finer
             # sampling if sub-minute rolling-window accuracy becomes necessary.
-            rx, tx, coverage = self.db.execute("""
+            if self.totals is None:
+                self.totals = self.db.execute("""
                 SELECT SUM(rx * (MIN(end, ?) - MAX(start, ?)) / (end - start)),
                        SUM(tx * (MIN(end, ?) - MAX(start, ?)) / (end - start)),
                        SUM(MIN(end, ?) - MAX(start, ?))
                 FROM intervals WHERE iface = ? AND end > ? AND start < ?
-            """, (end, end - WINDOW_SECONDS, end, end - WINDOW_SECONDS,
-                  end, end - WINDOW_SECONDS, self.latest[1], end - WINDOW_SECONDS, end)).fetchone()
+                """, (end, end - WINDOW_SECONDS, end, end - WINDOW_SECONDS,
+                      end, end - WINDOW_SECONDS, self.latest[1], end - WINDOW_SECONDS, end)).fetchone()
+            rx, tx, coverage = self.totals
             result["coverage_seconds"] = min(WINDOW_SECONDS, int(coverage or 0))
             result["valid"] = bool(self.healthy and 0 <= age <= MAX_GAP_SECONDS and coverage)
             if result["valid"]:

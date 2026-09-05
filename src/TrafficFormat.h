@@ -18,16 +18,16 @@ inline TransferText formatTransfer(double bytes, bool perSecond)
         return text;
 
     unsigned unit = 0;
-    // Live rates stay at two digits so their fixed 42px boxes never change font.
-    const double unitLimit = perSecond ? 99.5 : 999.95;
+    // Three significant rate digits fit the permanently condensed 42px font.
+    const double unitLimit = perSecond ? 999.5 : 999.95;
     while (bytes >= unitLimit && unit < 5)
     {
         bytes /= 1000.0;
         ++unit;
     }
     if (bytes >= unitLimit)
-        snprintf(text.number, sizeof(text.number), perSecond ? "99" : "999+");
-    else if (unit == 0 || (perSecond && bytes >= 9.95))
+        snprintf(text.number, sizeof(text.number), perSecond ? "999" : "999+");
+    else if (unit == 0 || (perSecond && bytes >= 99.95))
         snprintf(text.number, sizeof(text.number), "%.0f", bytes);
     else
         snprintf(text.number, sizeof(text.number), "%.1f", bytes);

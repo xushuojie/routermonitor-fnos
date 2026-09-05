@@ -9,8 +9,9 @@
 
 // extern lv_font_t my_font_name;
 LV_FONT_DECLARE(lv_font_montserrat_12)
-LV_FONT_DECLARE(lv_font_montserrat_22)
-LV_FONT_DECLARE(lv_font_montserrat_42)
+LV_FONT_DECLARE(monitor_value_22)
+LV_FONT_DECLARE(monitor_clock_42)
+LV_FONT_DECLARE(monitor_rate_42)
 
 TFT_eSPI tft = TFT_eSPI(); /* TFT instance */
 static lv_disp_buf_t disp_buf;
@@ -49,6 +50,10 @@ static lv_obj_t *carousel_value[3];
 static lv_obj_t *carousel_unit[2];
 static lv_obj_t *carousel_arrow[2];
 static lv_obj_t *carousel_dots[4];
+static lv_point_t net_arrow_points[2][5] = {
+    {{5, 13}, {5, 1}, {1, 5}, {5, 1}, {9, 5}},
+    {{5, 1}, {5, 13}, {1, 9}, {5, 13}, {9, 9}},
+};
 static lv_point_t disk_read_points[9] = {
     {1, 15}, {1, 1}, {9, 1}, {13, 4}, {13, 7}, {9, 9}, {1, 9}, {9, 9}, {14, 15},
 };
@@ -62,6 +67,10 @@ static lv_point_t carousel_arrow_points[2][5] = {
 static uint8_t carouselPage = 0;
 static bool carouselAnimating = false;
 static bool nasOnline = false;
+static bool animationFrameStarted = false;
+static uint32_t animationFrames = 0;
+static uint32_t animationMaxGapMs = 0;
+static uint32_t animationSlowFrames = 0;
 
 static lv_chart_series_t *ser1;
 static lv_chart_series_t *ser2;
@@ -107,6 +116,9 @@ void setupPages()
     lv_obj_set_style_local_radius(login_page, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, 0);
 
     monitor_page = lv_cont_create(lv_scr_act(), NULL);
+    lv_obj_clean_style_list(monitor_page, LV_OBJ_PART_MAIN);
+    lv_obj_set_style_local_bg_opa(monitor_page, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_OPA_100);
+    lv_obj_set_style_local_bg_color(monitor_page, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_BLACK);
     lv_obj_set_size(monitor_page, 240, 240);
 
     lv_obj_set_hidden(login_page, false);
@@ -121,49 +133,89 @@ void initLoginPage()
     lv_obj_align(preload, NULL, LV_ALIGN_CENTER, 0, 0);
 }
 
-// 连接WiFi
-void connectWiFi()
+// Connection transitions run independently of HTTP and never wait for Wi-Fi.
+static void serviceWiFi()
 {
-    static bool attempted = false;
-    if (attempted)
-        return;
-    attempted = true;
-
-    WiFi.mode(WIFI_STA);
-    WiFi.setAutoReconnect(true);
-    if (deviceConfig.wifiSsid[0])
+    static bool started = false;
+    static bool connected = false;
+    static uint32_t startedAt = 0;
+    static uint32_t retryAt = 0;
+    static lv_obj_t *setupLabel = NULL;
+    if (!started)
+    {
+        started = true;
+        startedAt = millis();
+        WiFi.persistent(false);
+        WiFi.mode(WIFI_STA);
+        WiFi.setSleepMode(WIFI_NONE_SLEEP);
+        WiFi.setAutoReconnect(true);
+#ifdef MONITOR_WIFI_RECOVERY_TEST
+        WiFi.begin("RouterMonitor-recovery-test-unavailable");
+#else
+        if (deviceConfig.wifiSsid[0])
+            WiFi.begin(deviceConfig.wifiSsid, deviceConfig.wifiPassword);
+        else
+            WiFi.begin(); // Migrate credentials already held by the SDK.
+#endif
+        Serial.println(F("Connecting to Wi-Fi ..."));
+    }
+#ifdef MONITOR_WIFI_RECOVERY_TEST
+    static bool released = false;
+    if (!released && millis() - startedAt >= 20000)
+    {
+        released = true;
         WiFi.begin(deviceConfig.wifiSsid, deviceConfig.wifiPassword);
-    else
-        WiFi.begin(); // 使用 ESP8266 SDK 已保存的凭据迁移现有设备。
-    Serial.println(F("Connecting to Wi-Fi ..."));
-
-    const unsigned long startedAt = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - startedAt < 15000)
-        delay(250);
-
-    if (WiFi.status() != WL_CONNECTED)
+        Serial.println(F("TEST Wi-Fi available after 20 seconds"));
+    }
+#endif
+    const bool online = WiFi.status() == WL_CONNECTED;
+    if (online && !connected)
     {
-        Serial.println(F("Wi-Fi unavailable; starting setup portal"));
+        stopConfigPortalAp();
+        lv_obj_set_hidden(monitor_page, false);
+        if (login_page)
+        {
+            lv_obj_del(login_page);
+            login_page = NULL;
+            setupLabel = NULL;
+        }
         startConfigPortal();
-        return;
+        configTime(8 * 3600, 0, "ntp.aliyun.com", "ntp1.aliyun.com", "pool.ntp.org");
+        Serial.print(F("Connection established! IP="));
+        Serial.println(WiFi.localIP());
     }
-    // Wi-Fi 验证成功：显示主界面，并彻底释放开机页、转圈对象和动画。
-    lv_obj_set_hidden(monitor_page, false);
-    if (login_page != NULL)
+    if (!online && millis() - startedAt >= 15000 && !connected)
     {
-        lv_obj_del(login_page);
-        login_page = NULL;
+        startConfigPortal();
+        if (isConfigPortalApMode() && !login_page)
+        {
+            login_page = lv_obj_create(lv_scr_act(), NULL);
+            lv_obj_clean_style_list(login_page, LV_OBJ_PART_MAIN);
+            lv_obj_set_style_local_bg_opa(login_page, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_OPA_100);
+            lv_obj_set_style_local_bg_color(login_page, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_BLACK);
+            lv_obj_set_size(login_page, 240, 240);
+            lv_obj_set_hidden(monitor_page, true);
+        }
+        if (login_page && !setupLabel)
+        {
+            lv_obj_clean(login_page);
+            setupLabel = lv_label_create(login_page, NULL);
+            lv_label_set_long_mode(setupLabel, LV_LABEL_LONG_BREAK);
+            lv_obj_set_style_local_text_font(setupLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
+            lv_obj_set_style_local_text_color(setupLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, lv_color_hex(0xf6f8fa));
+            lv_obj_set_width(setupLabel, 218);
+            lv_obj_set_pos(setupLabel, 11, 42);
+            lv_label_set_text_fmt(setupLabel, "WI-FI SETUP\n\n%s\nPassword: %s\n\nhttp://192.168.4.1", configPortalApSsid(), configPortalApPassword());
+        }
+        if (millis() - retryAt >= 10000)
+        {
+            retryAt = millis();
+            WiFi.reconnect();
+        }
     }
-
-    Serial.println("");                                // WiFi连接成功后
-    Serial.println("Connection established!");         // NodeMCU将通过串口监视器输出"连接成功"信息。
-    Serial.print("IP address:    ");                   // 同时还将输出NodeMCU的IP地址。这一功能是通过调用
-    Serial.println(WiFi.localIP().toString().c_str()); // WiFi.localIP()函数来实现的。该函数的返回值即NodeMCU的IP地址。
-
-    startConfigPortal();
-
-    // NTP uses UTC+8 and a 24-hour clock.
-    configTime(8 * 3600, 0, "ntp.aliyun.com", "ntp1.aliyun.com", "pool.ntp.org");
+    if (connected && !online)
+        startedAt = millis();
+    connected = online;
 }
 
 /* Display flushing */
@@ -180,61 +232,27 @@ void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color
     lv_disp_flush_ready(disp);
 }
 
-/* Reading input device (simulated encoder here) */
-bool read_encoder(lv_indev_drv_t *indev, lv_indev_data_t *data)
+static void setLabelText(lv_obj_t *label, const char *text)
 {
-    static int32_t last_diff = 0;
-    int32_t diff = 0;                   /* Dummy - no movement */
-    int btn_state = LV_INDEV_STATE_REL; /* Dummy - no press */
-
-    data->enc_diff = diff - last_diff;
-    data->state = btn_state;
-
-    last_diff = diff;
-
-    return false;
-}
-
-bool refreshMonitorData()
-{
-    if (getNasStatus(nasStatus))
-    {
-        cpu_usage = nasStatus.cpuPercent;
-        gpu_usage = nasStatus.gpuPercent;
-        mem_usage = nasStatus.memoryPercent;
-        nas_uptime_seconds = nasStatus.uptimeSeconds;
-        return true;
-    }
-    return false;
+    if (strcmp(lv_label_get_text(label), text) != 0)
+        lv_label_set_text(label, text);
 }
 
 // Fixed boxes and fonts keep changing digits and units from moving their neighbors.
 static void layoutRateValue(lv_obj_t *icon, lv_obj_t *value, lv_obj_t *unit,
                             lv_coord_t left, lv_coord_t baseline, bool prominent)
 {
-    const lv_font_t *valueFont = prominent ? &lv_font_montserrat_42 : &lv_font_montserrat_22;
-    const lv_coord_t iconWidth = prominent ? 12 : 16;
-    const lv_coord_t valueWidth = prominent ? 65 : 34;
+    const lv_font_t *valueFont = prominent ? &monitor_rate_42 : &monitor_value_22;
+    const lv_coord_t valueWidth = prominent ? 70 : 53;
     const lv_coord_t unitWidth = 30;
-    const lv_coord_t iconX = left + (prominent ? 3 : 20);
-    const lv_coord_t valueX = left + (prominent ? 16 : 36);
-    const lv_coord_t unitX = left + (prominent ? 82 : 70);
+    const lv_coord_t iconX = left + (prominent ? 0 : 2);
+    const lv_coord_t valueX = left + (prominent ? 11 : 22);
+    const lv_coord_t unitX = left + (prominent ? 82 : 78);
 
-    if (prominent)
-    {
-        lv_obj_set_style_local_text_font(icon, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
-        lv_label_set_align(icon, LV_LABEL_ALIGN_CENTER);
-        lv_label_set_long_mode(icon, LV_LABEL_LONG_CROP);
-        lv_obj_set_size(icon, iconWidth, lv_font_montserrat_12.line_height);
-        lv_obj_set_pos(icon, iconX, baseline - (lv_font_montserrat_12.line_height - lv_font_montserrat_12.base_line));
-    }
-    else
-    {
-        lv_obj_set_pos(icon, iconX, baseline - 16);
-    }
+    lv_obj_set_pos(icon, iconX, baseline - (prominent ? 14 : 16));
 
     lv_obj_set_style_local_text_font(value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, valueFont);
-    lv_label_set_align(value, LV_LABEL_ALIGN_CENTER);
+    lv_label_set_align(value, LV_LABEL_ALIGN_RIGHT);
     lv_label_set_long_mode(value, LV_LABEL_LONG_CROP);
     lv_obj_set_size(value, valueWidth, valueFont->line_height);
     lv_obj_set_pos(value, valueX, baseline - (valueFont->line_height - valueFont->base_line));
@@ -249,8 +267,8 @@ static void layoutRateValue(lv_obj_t *icon, lv_obj_t *value, lv_obj_t *unit,
 static void updateRateValue(lv_obj_t *value, lv_obj_t *unit, double bytes)
 {
     const TransferText text = formatTransfer(bytes, true);
-    lv_label_set_text(value, text.number);
-    lv_label_set_text(unit, text.unit[0] ? text.unit : "B/s");
+    setLabelText(value, text.number);
+    setLabelText(unit, text.unit[0] ? text.unit : "B/s");
 }
 
 void updateNetworkInfoLabel()
@@ -294,100 +312,68 @@ static void net_task_cb(lv_task_t *task)
     static bool havePrevious = false;
     static bool rateVisible = false;
     static uint32_t lastSuccessAt = 0;
-    static uint32_t reportAt = 0;
-    static uint32_t latencyTotal = 0;
-    static uint16_t requests = 0;
-    static uint16_t successes = 0;
-    static uint16_t failures = 0;
-    static uint16_t late = 0;
-    static uint16_t plotted = 0;
-    static uint16_t maximumLatency = 0;
-
-    const uint32_t startedAt = millis();
     NasNetSample current;
-    const bool ok = getNasNetSample(current);
-    const uint16_t latency = static_cast<uint16_t>(min(millis() - startedAt, 65535UL));
-    ++requests;
-    latencyTotal += latency;
-    maximumLatency = max(maximumLatency, latency);
-    if (latency > NET_SAMPLE_INTERVAL_MS)
-        ++late;
-
-    if (!ok)
+    if (!takeNasNetSample(current))
     {
-        lv_task_set_period(task, 1000);
-        ++failures;
-        if (rateVisible && millis() - lastSuccessAt > 2000)
+        if (millis() - lastSuccessAt > 2000)
         {
-            rateVisible = false;
             havePrevious = false;
-            nasStatus.rxBytesPerSecond = -1;
-            nasStatus.txBytesPerSecond = -1;
-            updateNetworkInfoLabel();
+            if (rateVisible)
+            {
+                rateVisible = false;
+                nasStatus.rxBytesPerSecond = nasStatus.txBytesPerSecond = -1;
+                updateNetworkInfoLabel();
+            }
         }
+        return;
+    }
+    lastSuccessAt = millis();
+    if (!havePrevious)
+    {
+        previous = speedBaseline = current;
+        havePrevious = true;
+        return;
+    }
+    NetRate adjacent;
+    if (!calculateNetRate(previous, current, adjacent) || adjacent.elapsedSeconds > 1.0)
+    {
+        speedBaseline = current;
+        // Counter reset and sample gaps are unknown, not a plausible zero rate.
+        nasStatus.rxBytesPerSecond = nasStatus.txBytesPerSecond = -1;
+        updateNetworkInfoLabel();
+        rateVisible = false;
     }
     else
     {
-        lv_task_set_period(task, NET_SAMPLE_INTERVAL_MS);
-        ++successes;
-        lastSuccessAt = millis();
-        if (!havePrevious)
-        {
-            previous = current;
+        appendChartSample(adjacent.rxBytesPerSecond, adjacent.txBytesPerSecond);
+        NetRate average;
+        if (!calculateNetRate(speedBaseline, current, average))
             speedBaseline = current;
-            havePrevious = true;
-        }
-        else
+        else if (average.elapsedSeconds >= 1.0)
         {
-            NetRate adjacent;
-            if (!calculateNetRate(previous, current, adjacent))
+            if (average.elapsedSeconds <= 2.0)
             {
-                speedBaseline = current;
+                nasStatus.rxBytesPerSecond = average.rxBytesPerSecond;
+                nasStatus.txBytesPerSecond = average.txBytesPerSecond;
+                rateVisible = true;
+                updateNetworkInfoLabel();
             }
-            else
-            {
-                if (adjacent.elapsedSeconds <= 1.0)
-                {
-                    appendChartSample(adjacent.rxBytesPerSecond, adjacent.txBytesPerSecond);
-                    ++plotted;
-                }
-
-                NetRate average;
-                if (!calculateNetRate(speedBaseline, current, average))
-                    speedBaseline = current;
-                else if (average.elapsedSeconds >= 1.0)
-                {
-                    if (average.elapsedSeconds <= 2.0)
-                    {
-                        nasStatus.rxBytesPerSecond = average.rxBytesPerSecond;
-                        nasStatus.txBytesPerSecond = average.txBytesPerSecond;
-                        rateVisible = true;
-                        updateNetworkInfoLabel();
-                    }
-                    speedBaseline = current;
-                }
-            }
-            previous = current;
+            speedBaseline = current;
         }
     }
-
-    if (millis() - reportAt >= 10000)
-    {
-        Serial.printf("NET %ums req=%u ok=%u fail=%u plot=%u avg=%lums max=%ums late=%u heap=%u\r\n",
-                      NET_SAMPLE_INTERVAL_MS, requests, successes, failures, plotted,
-                      requests ? static_cast<unsigned long>(latencyTotal / requests) : 0,
-                      maximumLatency, late, ESP.getFreeHeap());
-        reportAt = millis();
-        latencyTotal = requests = successes = failures = late = plotted = maximumLatency = 0;
-    }
+    previous = current;
 }
+
+static bool carouselLayoutChanged = true;
 
 static void showCarouselLabel(lv_obj_t *label, const char *text, const lv_font_t *font,
                               lv_color_t color, lv_coord_t x, lv_coord_t y,
                               lv_coord_t width, lv_coord_t height, lv_label_align_t align)
 {
+    setLabelText(label, text);
+    if (!carouselLayoutChanged)
+        return;
     lv_obj_set_hidden(label, false);
-    lv_label_set_text(label, text);
     lv_obj_set_style_local_text_font(label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, font);
     lv_obj_set_style_local_text_color(label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, color);
     lv_label_set_align(label, align);
@@ -411,11 +397,9 @@ static void hideCarouselContent()
 
 static void formatStorage(char *buffer, size_t size, double bytes)
 {
-    const TransferText text = formatTransfer(bytes, false);
+    const TransferText text = formatTransfer(bytes, true);
     if (!text.unit[0])
         snprintf(buffer, size, "%s", text.number);
-    else if (text.unit[1] == '\0')
-        snprintf(buffer, size, "%s%s", text.number, text.unit);
     else
         snprintf(buffer, size, "%s%c", text.number, text.unit[0]);
 }
@@ -431,10 +415,16 @@ static void renderCarousel()
     char third[20] = "--";
     const char *firstUnit = "";
     const char *secondUnit = "";
-    hideCarouselContent();
-    for (uint8_t index = 0; index < 4; ++index)
-        lv_obj_set_style_local_bg_color(carousel_dots[index], LV_OBJ_PART_MAIN, LV_STATE_DEFAULT,
-                                        index == carouselPage ? lv_color_hex(0xd7e1e6) : lv_color_hex(0x48616a));
+    static uint8_t renderedPage = 255;
+    carouselLayoutChanged = renderedPage != carouselPage;
+    if (carouselLayoutChanged)
+    {
+        hideCarouselContent();
+        for (uint8_t index = 0; index < 4; ++index)
+            lv_obj_set_style_local_bg_color(carousel_dots[index], LV_OBJ_PART_MAIN, LV_STATE_DEFAULT,
+                                            index == carouselPage ? lv_color_hex(0xd7e1e6) : lv_color_hex(0x48616a));
+        renderedPage = carouselPage;
+    }
 
     if (carouselPage == 0)
     {
@@ -452,10 +442,13 @@ static void renderCarousel()
         for (uint8_t index = 0; index < 2; ++index)
         {
             const lv_coord_t left = index * 115;
-            lv_obj_set_hidden(carousel_arrow[index], false);
-            lv_obj_set_pos(carousel_arrow[index], left + 8, 15);
-            showCarouselLabel(carousel_value[index], index ? second : first, &lv_font_montserrat_22,
-                              primary, left + 26, 12, 60, 24, LV_LABEL_ALIGN_RIGHT);
+            if (carouselLayoutChanged)
+            {
+                lv_obj_set_hidden(carousel_arrow[index], false);
+                lv_obj_set_pos(carousel_arrow[index], left + 3, 15);
+            }
+            showCarouselLabel(carousel_value[index], index ? second : first, &monitor_value_22,
+                              primary, left + 21, 12, 65, 24, LV_LABEL_ALIGN_RIGHT);
             showCarouselLabel(carousel_unit[index], index ? secondUnit : firstUnit,
                               &lv_font_montserrat_12, muted, left + 88, 20, 20, 15, LV_LABEL_ALIGN_LEFT);
         }
@@ -473,11 +466,11 @@ static void renderCarousel()
         }
         showCarouselLabel(carousel_title[0], "UPTIME", &lv_font_montserrat_12, muted,
                           0, -1, 230, 15, LV_LABEL_ALIGN_CENTER);
-        showCarouselLabel(carousel_value[0], first, &lv_font_montserrat_22, primary,
-                          14, 12, 64, 24, LV_LABEL_ALIGN_RIGHT);
+        showCarouselLabel(carousel_value[0], first, &monitor_value_22, primary,
+                          10, 12, 75, 24, LV_LABEL_ALIGN_RIGHT);
         showCarouselLabel(carousel_unit[0], "D", &lv_font_montserrat_12, muted,
-                          80, 20, 10, 15, LV_LABEL_ALIGN_LEFT);
-        showCarouselLabel(carousel_value[1], second, &lv_font_montserrat_22, primary,
+                          88, 20, 10, 15, LV_LABEL_ALIGN_LEFT);
+        showCarouselLabel(carousel_value[1], second, &monitor_value_22, primary,
                           145, 12, 48, 24, LV_LABEL_ALIGN_RIGHT);
         showCarouselLabel(carousel_unit[1], "H", &lv_font_montserrat_12, muted,
                           195, 20, 10, 15, LV_LABEL_ALIGN_LEFT);
@@ -489,17 +482,17 @@ static void renderCarousel()
         if (nasOnline && nasStatus.diskTemperature > 0)
             snprintf(second, sizeof(second), "%.0f", nasStatus.diskTemperature);
         showCarouselLabel(carousel_title[0], "CPU", &lv_font_montserrat_12, secondary,
-                          14, 20, 28, 15, LV_LABEL_ALIGN_RIGHT);
-        showCarouselLabel(carousel_value[0], first, &lv_font_montserrat_22, green,
-                          45, 12, 38, 24, LV_LABEL_ALIGN_CENTER);
+                          0, -1, 115, 15, LV_LABEL_ALIGN_CENTER);
+        showCarouselLabel(carousel_value[0], first, &monitor_value_22, green,
+                          31, 12, 45, 24, LV_LABEL_ALIGN_CENTER);
         showCarouselLabel(carousel_unit[0], "°C", &lv_font_montserrat_12, muted,
-                          86, 20, 14, 15, LV_LABEL_ALIGN_LEFT);
+                          80, 20, 14, 15, LV_LABEL_ALIGN_LEFT);
         showCarouselLabel(carousel_title[1], "DISK MAX", &lv_font_montserrat_12, secondary,
-                          115, 20, 60, 15, LV_LABEL_ALIGN_RIGHT);
-        showCarouselLabel(carousel_value[1], second, &lv_font_montserrat_22, green,
-                          176, 12, 38, 24, LV_LABEL_ALIGN_CENTER);
+                          115, -1, 115, 15, LV_LABEL_ALIGN_CENTER);
+        showCarouselLabel(carousel_value[1], second, &monitor_value_22, green,
+                          146, 12, 45, 24, LV_LABEL_ALIGN_CENTER);
         showCarouselLabel(carousel_unit[1], "°C", &lv_font_montserrat_12, muted,
-                          215, 20, 14, 15, LV_LABEL_ALIGN_LEFT);
+                          195, 20, 14, 15, LV_LABEL_ALIGN_LEFT);
     }
     else
     {
@@ -517,7 +510,7 @@ static void renderCarousel()
         {
             showCarouselLabel(carousel_title[index], titles[index], &lv_font_montserrat_12, secondary,
                               left[index], 0, width[index], 15, LV_LABEL_ALIGN_CENTER);
-            showCarouselLabel(carousel_value[index], values[index], &lv_font_montserrat_22,
+            showCarouselLabel(carousel_value[index], values[index], &monitor_value_22,
                               index == 2 ? green : primary, left[index], 12, width[index], 24,
                               LV_LABEL_ALIGN_CENTER);
         }
@@ -533,9 +526,26 @@ static void updateDiskIo(bool online)
                     valid ? nasStatus.diskWriteBytesPerSecond : -1);
 }
 
+static void carouselSetX(void *object, lv_anim_value_t x)
+{
+    static uint32_t lastFrameAt = 0;
+    const uint32_t now = millis();
+    if (animationFrameStarted && lastFrameAt)
+    {
+        const uint32_t gap = now - lastFrameAt;
+        animationMaxGapMs = max(animationMaxGapMs, gap);
+        animationSlowFrames += gap > 50;
+        ++animationFrames;
+    }
+    lastFrameAt = now;
+    animationFrameStarted = true;
+    lv_obj_set_x(static_cast<lv_obj_t *>(object), x);
+}
+
 static void carouselEnterReady(lv_anim_t *animation)
 {
     carouselAnimating = false;
+    renderCarousel();
 }
 
 static void carouselExitReady(lv_anim_t *animation)
@@ -548,9 +558,13 @@ static void carouselExitReady(lv_anim_t *animation)
     lv_anim_t enter;
     lv_anim_init(&enter);
     lv_anim_set_var(&enter, carousel_layer);
-    lv_anim_set_exec_cb(&enter, (lv_anim_exec_xcb_t)lv_obj_set_x);
+    lv_anim_set_exec_cb(&enter, carouselSetX);
     lv_anim_set_values(&enter, 230, 0);
     lv_anim_set_time(&enter, 200);
+    lv_anim_path_t path;
+    lv_anim_path_init(&path);
+    lv_anim_path_set_cb(&path, lv_anim_path_ease_out);
+    lv_anim_set_path(&enter, &path);
     lv_anim_set_ready_cb(&enter, carouselEnterReady);
     lv_anim_start(&enter);
 }
@@ -560,13 +574,18 @@ static void carousel_task_cb(lv_task_t *task)
     if (carouselAnimating)
         return;
     carouselAnimating = true;
+    animationFrameStarted = false;
 
     lv_anim_t exit;
     lv_anim_init(&exit);
     lv_anim_set_var(&exit, carousel_layer);
-    lv_anim_set_exec_cb(&exit, (lv_anim_exec_xcb_t)lv_obj_set_x);
+    lv_anim_set_exec_cb(&exit, carouselSetX);
     lv_anim_set_values(&exit, 0, -230);
     lv_anim_set_time(&exit, 200);
+    lv_anim_path_t path;
+    lv_anim_path_init(&path);
+    lv_anim_path_set_cb(&path, lv_anim_path_ease_in);
+    lv_anim_set_path(&exit, &path);
     lv_anim_set_ready_cb(&exit, carouselExitReady);
     lv_anim_start(&exit);
 }
@@ -589,13 +608,14 @@ static void createMetric(const char *titleText, lv_coord_t left, lv_color_t colo
     lv_label_set_text(title, titleText);
     lv_obj_set_style_local_text_font(title, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
     lv_obj_set_style_local_text_color(title, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, lv_color_hex(0xf6f8fa));
+    lv_label_set_long_mode(title, LV_LABEL_LONG_CROP);
     lv_label_set_align(title, LV_LABEL_ALIGN_CENTER);
     lv_obj_set_size(title, 72, 15);
     lv_obj_set_pos(title, left, 184);
 
     value = lv_label_create(monitor_page, NULL);
-    lv_label_set_text(value, "0%");
-    lv_obj_set_style_local_text_font(value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_22);
+    lv_label_set_text(value, "--");
+    lv_obj_set_style_local_text_font(value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &monitor_value_22);
     lv_obj_set_style_local_text_color(value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, lv_color_hex(0xf6f8fa));
     lv_label_set_align(value, LV_LABEL_ALIGN_CENTER);
     lv_label_set_long_mode(value, LV_LABEL_LONG_CROP);
@@ -635,9 +655,9 @@ static void clock_task_cb(lv_task_t *task)
     time_t now = time(nullptr);
     if (now < 1609459200)
     {
-        lv_label_set_text(weekday_label, "---");
-        lv_label_set_text(date_label, "-- --");
-        lv_label_set_text(time_label, "--:--:--");
+        setLabelText(weekday_label, "---");
+        setLabelText(date_label, "-- --");
+        setLabelText(time_label, "--:--:--");
         return;
     }
 
@@ -649,9 +669,9 @@ static void clock_task_cb(lv_task_t *task)
     char dateText[16];
     snprintf(timeText, sizeof(timeText), "%02d:%02d:%02d", timeInfo.tm_hour, timeInfo.tm_min, timeInfo.tm_sec);
     snprintf(dateText, sizeof(dateText), "%02d-%02d", timeInfo.tm_mon + 1, timeInfo.tm_mday);
-    lv_label_set_text(weekday_label, weekdays[timeInfo.tm_wday]);
-    lv_label_set_text(date_label, dateText);
-    lv_label_set_text(time_label, timeText);
+    setLabelText(weekday_label, weekdays[timeInfo.tm_wday]);
+    setLabelText(date_label, dateText);
+    setLabelText(time_label, timeText);
 
     static int lastLoggedMinute = -1;
     if (timeInfo.tm_min != lastLoggedMinute)
@@ -662,82 +682,75 @@ static void clock_task_cb(lv_task_t *task)
     }
 }
 
-// task循环执行的函数
+// Rendering consumes completed snapshots; HTTP never runs in an LVGL callback.
+static void updateMetric(lv_obj_t *bar, lv_obj_t *label, double percentage, bool valid)
+{
+    char text[8] = "--";
+    int value = 0;
+    if (valid && isfinite(percentage))
+    {
+        value = constrain(static_cast<int>(round(percentage)), 0, 100);
+        snprintf(text, sizeof(text), "%d%%", value);
+    }
+    if (lv_bar_get_value(bar) != value)
+        lv_bar_set_value(bar, value, LV_ANIM_OFF);
+    setLabelText(label, text);
+}
+
 static void task_cb(lv_task_t *task)
 {
-    static uint16_t wifiFailures = 0;
-    static uint16_t nasFailures = 0;
-    static uint8_t lowHeapSamples = 0;
-
-    if (WiFi.status() != WL_CONNECTED)
+    static uint32_t lastSuccessAt = 0;
+    const bool received = takeNasStatus(nasStatus);
+    if (received)
     {
-        connectWiFi();
-        if (WiFi.status() != WL_CONNECTED)
-        {
-            nasOnline = false;
-            updateDiskIo(false);
-            renderCarousel();
-            if (!isConfigPortalApMode())
-            {
-                ++wifiFailures;
-                if (wifiFailures % 5 == 1)
-                    WiFi.reconnect();
-                if (wifiFailures >= 45)
-                    ESP.restart();
-            }
-            return;
-        }
+        lastSuccessAt = millis();
+        nasOnline = true;
+        cpu_usage = nasStatus.cpuPercent;
+        gpu_usage = nasStatus.gpuPercent;
+        mem_usage = nasStatus.memoryPercent;
+        nas_uptime_seconds = nasStatus.uptimeSeconds;
     }
-    wifiFailures = 0;
-
-    const bool nasOk = refreshMonitorData();
-    if (nasOk)
-        nasFailures = 0;
-    else
-    {
-        nasOnline = false;
-        updateDiskIo(false);
-        renderCarousel();
-        ++nasFailures;
-        if (nasFailures == 30)
-            WiFi.reconnect();
-        if (nasFailures >= 300)
-            ESP.restart();
+    else if (!nasOnline || (WiFi.status() == WL_CONNECTED && millis() - lastSuccessAt <= 3000))
         return;
-    }
-    nasOnline = true;
-    updateDiskIo(true);
-    renderCarousel();
-
-    lv_bar_set_value(cpu_bar, cpu_usage, LV_ANIM_OFF);
-    lv_label_set_text_fmt(cpu_value_label, "%.0f%%", cpu_usage);
-
-    lv_bar_set_value(gpu_bar, gpu_usage, LV_ANIM_OFF);
-    lv_label_set_text_fmt(gpu_value_label, "%.0f%%", gpu_usage);
-
-    lv_bar_set_value(mem_bar, mem_usage, LV_ANIM_OFF);
-    lv_label_set_text_fmt(mem_value_label, "%.0f%%", mem_usage);
-
-    if (ESP.getFreeHeap() < 7000)
-        ++lowHeapSamples;
     else
-        lowHeapSamples = 0;
-    if (lowHeapSamples >= 10)
-        ESP.restart();
-
-    // Runtime heap diagnostics for physical-device tuning.
-    Serial.print("⚠ Left Memory:");
-    Serial.println(ESP.getFreeHeap());
-    Serial.printf("24H RX=%.0f TX=%.0f COVER=%lus VALID=%d\r\n", nasStatus.rxBytes24h,
-                  nasStatus.txBytes24h, static_cast<unsigned long>(nasStatus.trafficCoverageSeconds), nasStatus.trafficHistoryValid);
+        nasOnline = false;
+    updateDiskIo(nasOnline);
+    if (!carouselAnimating)
+        renderCarousel();
+    updateMetric(cpu_bar, cpu_value_label, cpu_usage, nasOnline);
+    updateMetric(gpu_bar, gpu_value_label, gpu_usage, nasOnline);
+    updateMetric(mem_bar, mem_value_label, mem_usage, nasOnline);
 }
+
+#ifdef ESP8266
+// LVGL finishes a glyph before requesting the next. Copying its small bitmap
+// once avoids thousands of slow unaligned Flash byte-load exceptions per frame.
+static const uint8_t *readDisplayGlyph(const lv_font_t *font, uint32_t letter)
+{
+    static uint8_t glyphBuffer[512];
+    const uint8_t *bitmap = lv_font_get_bitmap_fmt_txt(font, letter);
+    lv_font_glyph_dsc_t glyph;
+    if (!bitmap || !lv_font_get_glyph_dsc_fmt_txt(font, &glyph, letter, 0))
+        return NULL;
+    const size_t length = (glyph.box_w * glyph.box_h * glyph.bpp + 7) / 8;
+    if (length > sizeof(glyphBuffer))
+        return bitmap; // NON32XFER_HANDLER remains the fallback for larger glyphs.
+    memcpy_P(glyphBuffer, bitmap, length);
+    return glyphBuffer;
+}
+#endif
 
 void setup()
 {
     Serial.begin(115200); /* prepare for possible serial debug */
-    srand((unsigned)time(NULL));
     loadDeviceConfig();
 
+#ifdef ESP8266
+    lv_font_montserrat_12.get_glyph_bitmap = readDisplayGlyph;
+    monitor_clock_42.get_glyph_bitmap = readDisplayGlyph;
+    monitor_rate_42.get_glyph_bitmap = readDisplayGlyph;
+    monitor_value_22.get_glyph_bitmap = readDisplayGlyph;
+#endif
     lv_init();
 
 #if LV_USE_LOG != 0
@@ -758,13 +771,6 @@ void setup()
     disp_drv.flush_cb = my_disp_flush;
     disp_drv.buffer = &disp_buf;
     lv_disp_drv_register(&disp_drv);
-
-    /*Initialize the (dummy) input device driver*/
-    lv_indev_drv_t indev_drv;
-    lv_indev_drv_init(&indev_drv);
-    indev_drv.type = LV_INDEV_TYPE_ENCODER;
-    indev_drv.read_cb = read_encoder;
-    lv_indev_drv_register(&indev_drv);
 
     setupPages();
     initLoginPage();
@@ -792,26 +798,26 @@ void setup()
     lv_obj_set_size(content, 230, 230);
     lv_obj_set_pos(content, 5, 5);
 
-    upload_label = lv_label_create(monitor_page, NULL);
-    lv_label_set_text(upload_label, LV_SYMBOL_UPLOAD);
-    lv_obj_set_style_local_text_font(upload_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
-    lv_obj_set_style_local_text_color(upload_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, red);
+    upload_label = lv_line_create(monitor_page, NULL);
+    lv_line_set_points(upload_label, net_arrow_points[0], 5);
+    lv_obj_set_style_local_line_width(upload_label, LV_LINE_PART_MAIN, LV_STATE_DEFAULT, 1);
+    lv_obj_set_style_local_line_color(upload_label, LV_LINE_PART_MAIN, LV_STATE_DEFAULT, red);
     up_speed_label = lv_label_create(monitor_page, NULL);
     lv_label_set_text(up_speed_label, "--");
-    lv_obj_set_style_local_text_font(up_speed_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_42);
+    lv_obj_set_style_local_text_font(up_speed_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &monitor_clock_42);
     lv_obj_set_style_local_text_color(up_speed_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, primaryColor);
     up_speed_unit_label = lv_label_create(monitor_page, NULL);
     lv_label_set_text(up_speed_unit_label, "");
     lv_obj_set_style_local_text_font(up_speed_unit_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
     lv_obj_set_style_local_text_color(up_speed_unit_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, mutedColor);
 
-    download_label = lv_label_create(monitor_page, NULL);
-    lv_label_set_text(download_label, LV_SYMBOL_DOWNLOAD);
-    lv_obj_set_style_local_text_font(download_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
-    lv_obj_set_style_local_text_color(download_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, blue);
+    download_label = lv_line_create(monitor_page, NULL);
+    lv_line_set_points(download_label, net_arrow_points[1], 5);
+    lv_obj_set_style_local_line_width(download_label, LV_LINE_PART_MAIN, LV_STATE_DEFAULT, 1);
+    lv_obj_set_style_local_line_color(download_label, LV_LINE_PART_MAIN, LV_STATE_DEFAULT, blue);
     down_speed_label = lv_label_create(monitor_page, NULL);
     lv_label_set_text(down_speed_label, "--");
-    lv_obj_set_style_local_text_font(down_speed_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_42);
+    lv_obj_set_style_local_text_font(down_speed_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &monitor_clock_42);
     lv_obj_set_style_local_text_color(down_speed_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, primaryColor);
     down_speed_unit_label = lv_label_create(monitor_page, NULL);
     lv_label_set_text(down_speed_unit_label, "");
@@ -849,7 +855,7 @@ void setup()
     lv_obj_set_style_local_line_color(disk_read_label, LV_LINE_PART_MAIN, LV_STATE_DEFAULT, green);
     disk_read_value = lv_label_create(monitor_page, NULL);
     lv_label_set_text(disk_read_value, "--");
-    lv_obj_set_style_local_text_font(disk_read_value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_22);
+    lv_obj_set_style_local_text_font(disk_read_value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &monitor_value_22);
     lv_obj_set_style_local_text_color(disk_read_value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, primaryColor);
     disk_read_unit = lv_label_create(monitor_page, NULL);
     lv_label_set_text(disk_read_unit, "");
@@ -863,7 +869,7 @@ void setup()
     lv_obj_set_style_local_line_color(disk_write_label, LV_LINE_PART_MAIN, LV_STATE_DEFAULT, amber);
     disk_write_value = lv_label_create(monitor_page, NULL);
     lv_label_set_text(disk_write_value, "--");
-    lv_obj_set_style_local_text_font(disk_write_value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_22);
+    lv_obj_set_style_local_text_font(disk_write_value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &monitor_value_22);
     lv_obj_set_style_local_text_color(disk_write_value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, primaryColor);
     disk_write_unit = lv_label_create(monitor_page, NULL);
     lv_label_set_text(disk_write_unit, "");
@@ -892,7 +898,7 @@ void setup()
         lv_label_set_align(carousel_title[index], LV_LABEL_ALIGN_CENTER);
         lv_label_set_long_mode(carousel_title[index], LV_LABEL_LONG_CROP);
         carousel_value[index] = lv_label_create(carousel_layer, NULL);
-        lv_obj_set_style_local_text_font(carousel_value[index], LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_22);
+        lv_obj_set_style_local_text_font(carousel_value[index], LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &monitor_value_22);
         lv_label_set_align(carousel_value[index], LV_LABEL_ALIGN_CENTER);
         lv_label_set_long_mode(carousel_value[index], LV_LABEL_LONG_CROP);
     }
@@ -923,24 +929,26 @@ void setup()
     renderCarousel();
 
     weekday_label = lv_label_create(monitor_page, NULL);
-    lv_label_set_text(weekday_label, "---");
+    setLabelText(weekday_label, "---");
     lv_obj_set_style_local_text_font(weekday_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
     lv_obj_set_style_local_text_color(weekday_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, secondaryColor);
+    lv_label_set_long_mode(weekday_label, LV_LABEL_LONG_CROP);
     lv_label_set_align(weekday_label, LV_LABEL_ALIGN_CENTER);
     lv_obj_set_size(weekday_label, 46, 15);
     lv_obj_set_pos(weekday_label, 5, 147);
 
     date_label = lv_label_create(monitor_page, NULL);
-    lv_label_set_text(date_label, "-- --");
+    setLabelText(date_label, "-- --");
     lv_obj_set_style_local_text_font(date_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
     lv_obj_set_style_local_text_color(date_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, secondaryColor);
+    lv_label_set_long_mode(date_label, LV_LABEL_LONG_CROP);
     lv_label_set_align(date_label, LV_LABEL_ALIGN_CENTER);
     lv_obj_set_size(date_label, 46, 15);
     lv_obj_set_pos(date_label, 5, 161);
 
     time_label = lv_label_create(monitor_page, NULL);
-    lv_label_set_text(time_label, "--:--:--");
-    lv_obj_set_style_local_text_font(time_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_42);
+    setLabelText(time_label, "--:--:--");
+    lv_obj_set_style_local_text_font(time_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &monitor_clock_42);
     lv_obj_set_style_local_text_letter_space(time_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, -2);
     lv_obj_set_style_local_text_color(time_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
     lv_label_set_align(time_label, LV_LABEL_ALIGN_CENTER);
@@ -957,14 +965,54 @@ void setup()
     createDivider(5, 95, 230, lv_color_hex(0x23414b));
     createDivider(5, 136, 230, lv_color_hex(0x23414b));
 
-    lv_task_create(task_cb, 1000, LV_TASK_PRIO_MID, NULL);
-    lv_task_create(net_task_cb, NET_SAMPLE_INTERVAL_MS, LV_TASK_PRIO_HIGH, NULL);
+    lv_task_create(task_cb, 20, LV_TASK_PRIO_MID, NULL);
+    lv_task_create(net_task_cb, 20, LV_TASK_PRIO_HIGH, NULL);
     lv_task_create(clock_task_cb, 1000, LV_TASK_PRIO_MID, NULL);
     lv_task_create(carousel_task_cb, 5000, LV_TASK_PRIO_LOW, NULL);
 }
 
+static void reportDiagnostics()
+{
+    static uint32_t reportedAt = 0;
+    static uint32_t lastLoopAt = 0;
+    static uint32_t maxLoopGapMs = 0;
+    static uint32_t minHeap = UINT32_MAX;
+    const uint32_t now = millis();
+    if (lastLoopAt)
+        maxLoopGapMs = max(maxLoopGapMs, now - lastLoopAt);
+    lastLoopAt = now;
+    minHeap = min(minHeap, ESP.getFreeHeap());
+    if (now - reportedAt < 10000 || carouselAnimating)
+        return;
+    reportedAt = now;
+    lv_mem_monitor_t memory;
+    lv_mem_monitor(&memory);
+    const NasRequestHealth &health = getNasRequestHealth();
+    Serial.printf("HTTP net=%lu/%lu fail=%lu max=%lums status=%lu/%lu fail=%lu max=%lums error=%u\r\n",
+                  (unsigned long)health.netSuccesses, (unsigned long)health.netRequests,
+                  (unsigned long)health.netFailures, (unsigned long)health.netMaxLatencyMs,
+                  (unsigned long)health.statusSuccesses, (unsigned long)health.statusRequests,
+                  (unsigned long)health.statusFailures, (unsigned long)health.statusMaxLatencyMs,
+                  (unsigned)health.lastError);
+    Serial.printf("PERF heap=%lu min=%lu block=%lu stack=%lu lvfree=%lu lvblock=%lu lvfrag=%u loop=%lums frames=%lu frameMax=%lums slow=%lu\r\n",
+                  (unsigned long)ESP.getFreeHeap(), (unsigned long)minHeap,
+                  (unsigned long)ESP.getMaxFreeBlockSize(), (unsigned long)ESP.getFreeContStack(),
+                  (unsigned long)memory.free_size, (unsigned long)memory.free_biggest_size,
+                  (unsigned)memory.frag_pct, (unsigned long)maxLoopGapMs,
+                  (unsigned long)animationFrames, (unsigned long)animationMaxGapMs,
+                  (unsigned long)animationSlowFrames);
+    Serial.printf("STATE online=%u history=%u storage=%u rx24=%.0f tx24=%.0f cpu=%.1f temp=%.0f disk=%.0f\r\n",
+                  nasOnline, nasStatus.trafficHistoryValid, nasStatus.storageValid,
+                  nasStatus.rxBytes24h, nasStatus.txBytes24h, nasStatus.cpuPercent,
+                  nasStatus.cpuTemperature, nasStatus.diskTemperature);
+    maxLoopGapMs = animationFrames = animationMaxGapMs = animationSlowFrames = 0;
+}
+
 void loop()
 {
+    reportDiagnostics();
+    serviceWiFi();
+    pollNasRequests();
     handleConfigPortal();
     lv_task_handler(); /* let the GUI do its work */
 }

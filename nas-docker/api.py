@@ -9,6 +9,7 @@ import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 
 from traffic_history import TrafficHistory
 
@@ -25,6 +26,9 @@ SMART_ROOT = os.environ.get("SMART_ROOT", "/host/smartmontools")
 SMART_MAX_AGE_SECONDS = int(os.environ.get("NAS_STATUS_SMART_MAX_AGE_SECONDS", "7200"))
 SMART_TAIL_BYTES = 65536
 _smart_temperature_cache = {}
+_network_lock = threading.Lock()
+_network_previous = {}
+_network_epoch = time.time_ns()
 
 
 def host_path(root, path):
@@ -289,7 +293,7 @@ def network_counters(interfaces):
         interfaces = [interfaces]
     if not interfaces:
         return None
-    rx_total = tx_total = 0
+    counters = {}
     for interface in interfaces:
         base = host_path(SYS_ROOT, f"/sys/class/net/{interface}/statistics")
         try:
@@ -299,30 +303,42 @@ def network_counters(interfaces):
             return None
         if min(rx, tx) < 0:
             return None
-        rx_total += rx
-        tx_total += tx
-    return rx_total, tx_total
+        counters[interface] = (rx, tx)
+    return counters
 
 
-def network_snapshot():
-    interface, interfaces = selected_network_interfaces()
-    counters = network_counters(interfaces)
-    if counters is None:
-        return None
-    return {
-        "sample_time": time.monotonic(),
-        "iface": interface,
-        "rx_bytes": counters[0],
-        "tx_bytes": counters[1],
-    }
+def network_snapshot(include_counters=False):
+    global _network_previous, _network_epoch
+    with _network_lock:
+        interface, interfaces = selected_network_interfaces()
+        counters = network_counters(interfaces)
+        if counters is None:
+            _network_previous = {}
+            _network_epoch += 1
+            return None
+        if _network_previous and (counters.keys() != _network_previous.keys() or any(
+                value < old for name, values in counters.items()
+                for value, old in zip(values, _network_previous[name]))):
+            _network_epoch += 1
+        _network_previous = counters
+        result = {
+            "sample_time": time.monotonic(),
+            "iface": interface,
+            "rx_bytes": sum(values[0] for values in counters.values()),
+            "tx_bytes": sum(values[1] for values in counters.values()),
+            "counter_epoch": str(_network_epoch),
+        }
+        if include_counters:
+            result["counters"] = {"epoch": result["counter_epoch"], "values": counters}
+        return result
 
 
 def traffic_sample():
-    snapshot = network_snapshot()
+    snapshot = network_snapshot(include_counters=True)
     boot_id = read_text(host_path(PROC_ROOT, "/proc/sys/kernel/random/boot_id"))
     if snapshot is None or not boot_id:
         return None
-    return snapshot["iface"], snapshot["rx_bytes"], snapshot["tx_bytes"], boot_id
+    return snapshot["iface"], snapshot["rx_bytes"], snapshot["tx_bytes"], boot_id, snapshot["counters"]
 
 
 def physical_block_names():
@@ -419,14 +435,20 @@ class Metrics:
         self.previous_disk = None
         self.interface = ""
         self.disk_devices = ""
+        self.cached = None
+        self.sampled_at = self.temperatures_at = self.storage_at = 0
+        self.cached_temperatures = self.cached_storage = None
 
     def snapshot(self):
         now = time.monotonic()
+        if self.cached is not None and 0 <= now - self.sampled_at < 1:
+            return {**self.cached, "traffic_24h": self.traffic_history.snapshot()}
         current_cpu = cpu_sample()
         cpu_percent = 0.0
         if current_cpu and self.previous_cpu:
             old = self.previous_cpu[0]
-            total = sum(current_cpu) - sum(old)
+            # guest and guest_nice are already included in user and nice.
+            total = sum(current_cpu[:8]) - sum(old[:8])
             idle_now = current_cpu[3] + (current_cpu[4] if len(current_cpu) > 4 else 0)
             idle_old = old[3] + (old[4] if len(old) > 4 else 0)
             idle = idle_now - idle_old
@@ -435,21 +457,17 @@ class Metrics:
         if current_cpu:
             self.previous_cpu = (current_cpu, now)
 
-        detected_interface, interfaces = selected_network_interfaces()
-        if detected_interface != self.interface:
-            self.interface = detected_interface
-            self.previous_network = None
-        current_network = network_counters(interfaces)
+        current_network = network_snapshot()
         rx_speed = tx_speed = 0
         if current_network and self.previous_network:
-            elapsed = now - self.previous_network[1]
-            if elapsed > 0:
-                rx_speed = max(0, int((current_network[0] - self.previous_network[0][0]) / elapsed))
-                tx_speed = max(0, int((current_network[1] - self.previous_network[0][1]) / elapsed))
+            elapsed = current_network["sample_time"] - self.previous_network["sample_time"]
+            if (elapsed > 0 and current_network["iface"] == self.previous_network["iface"]
+                    and current_network["counter_epoch"] == self.previous_network["counter_epoch"]):
+                rx_speed = max(0, int((current_network["rx_bytes"] - self.previous_network["rx_bytes"]) / elapsed))
+                tx_speed = max(0, int((current_network["tx_bytes"] - self.previous_network["tx_bytes"]) / elapsed))
         if current_network:
-            self.previous_network = (current_network, now)
-        else:
-            self.previous_network = None
+            self.interface = current_network["iface"]
+        self.previous_network = current_network
 
         gpu_backend, gpu_value, gpu_is_cumulative = gpu_sample()
         gpu_percent = 0.0
@@ -482,12 +500,21 @@ class Metrics:
             self.disk_devices = ""
             self.previous_disk = None
 
-        return {
+        if self.cached_temperatures is None or now - self.temperatures_at >= 5:
+            self.cached_temperatures = temperatures()
+            self.temperatures_at = now
+        if self.cached_storage is None or now - self.storage_at >= 30:
+            self.cached_storage = storage_status()
+            self.storage_at = now
+        summary = {kind: next((sensor["temp"] for sensor in self.cached_temperatures
+                               if sensor["type"] == kind), None) for kind in ("cpu", "disk")}
+        self.cached = {
             "time": int(time.time()),
             "cpu": {"percent": cpu_percent},
             "gpu": {"utilization": gpu_percent, "backend": gpu_backend},
             "memory": memory_status(),
-            "temp": temperatures(),
+            "temp": self.cached_temperatures,
+            "temperature_summary": summary,
             "net": {
                 "iface": self.interface,
                 "rx_speed": rx_speed,
@@ -499,10 +526,12 @@ class Metrics:
                 "write_speed": disk_write_speed,
                 "valid": current_disk is not None,
             },
-            "storage": storage_status(),
+            "storage": self.cached_storage,
             "uptime": uptime_seconds(),
             "traffic_24h": self.traffic_history.snapshot(),
         }
+        self.sampled_at = now
+        return self.cached
 
 
 def resolve_token():
@@ -516,7 +545,8 @@ def handler_factory(metrics, token):
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            path = self.path.split("?", 1)[0]
+            request = urlsplit(self.path)
+            path = request.path
             if path == "/health":
                 return self.respond(200, {"status": "ok"})
             if path not in ("/", "/status", "/net"):
@@ -531,6 +561,16 @@ def handler_factory(metrics, token):
                 return self.respond(200, snapshot)
             with metrics_lock:
                 snapshot = metrics.snapshot()
+            if parse_qs(request.query).get("display") == ["1"]:
+                fields = {
+                    "cpu": ("percent",), "gpu": ("utilization",), "memory": ("percent",),
+                    "traffic_24h": ("rx_bytes", "tx_bytes", "coverage_seconds", "valid"),
+                    "disk_io": ("read_speed", "write_speed", "valid"),
+                    "storage": ("total", "used", "percent", "valid"),
+                }
+                snapshot = {**{key: {field: snapshot[key][field] for field in names}
+                               for key, names in fields.items()},
+                            "uptime": snapshot["uptime"], "temperature_summary": snapshot["temperature_summary"]}
             return self.respond(200, snapshot)
 
         def respond(self, status, payload):
@@ -551,6 +591,7 @@ def handler_factory(metrics, token):
 
 
 def main():
+    global _network_previous, _network_epoch
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=18199)
     args = parser.parse_args()
@@ -558,6 +599,9 @@ def main():
     if not token:
         raise SystemExit("NAS_STATUS_TOKEN or NAS_STATUS_TOKEN_FILE is required")
     history = TrafficHistory(os.environ.get("NAS_STATUS_HISTORY_DB", DEFAULT_HISTORY_DB), traffic_sample)
+    if history.previous and history.previous[5]:
+        _network_previous = history.previous[5]["values"]
+        _network_epoch = int(history.previous[5]["epoch"])
     server = ThreadingHTTPServer(("0.0.0.0", args.port), handler_factory(Metrics(history), token))
     history.start()
     print(f"NAS status API listening on :{args.port}, interface={CONFIGURED_IFACE}", flush=True)

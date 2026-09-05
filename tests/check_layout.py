@@ -17,6 +17,14 @@ FONTS = ROOT / ".pio/libdeps/nodemcuv2/lv_arduino/src/src/lv_font"
 
 
 def font_width(size):
+    if size != 12:
+        name = {22: "monitor_value_22", 42: "monitor_clock_42", "rate": "monitor_rate_42"}[size]
+        source = (ROOT / "src/DisplayFonts.c").read_text()
+        glyphs = source.split(name + "_glyphs[] =", 1)[1].split("};", 1)[0]
+        advances = [int(n) for n in re.findall(r"\.adv_w = (\d+)", glyphs)]
+        codes = source.split(name + "_unicode[] = {", 1)[1].split("}", 1)[0]
+        ids = {int(n) + 32: i + 1 for i, n in enumerate(re.findall(r"\d+", codes))}
+        return lambda text, spacing=0: sum((advances[ids[ord(c)]] + 8) >> 4 for c in text) + max(0, len(text) - 1) * spacing
     path = FONTS / f"lv_font_montserrat_{size}.c"
     if not path.is_file():
         raise SystemExit(f"Missing {path}; run `pio run -e nodemcuv2` first.")
@@ -70,7 +78,7 @@ int main(int argc, char **argv) {
 
 
 def main():
-    widths = {size: font_width(size) for size in (12, 22, 42)}
+    widths = {size: font_width(size) for size in (12, 22, 42, "rate")}
     cases = [-1, math.nan, math.inf, 0, 1, 999.95]
     expected = [("--", ""), ("--", ""), ("--", ""), ("0", "B"), ("1", "B"), ("1.0", "KB")]
     units = ("KB", "MB", "GB", "TB", "PB")
@@ -89,18 +97,23 @@ def main():
         assert actual == (number, unit), (cases[index], actual)
 
     rate_cases = formatted((99_400, 99_500, 1_200_000, 12_300_000,
-                            999_400_000, 999_500_000, 1e21))[1::2]
-    assert rate_cases == [("99", "KB/s"), ("0.1", "MB/s"), ("1.2", "MB/s"),
-                          ("12", "MB/s"), ("1.0", "GB/s"), ("1.0", "GB/s"),
-                          ("99", "PB/s")], rate_cases
+                            100_000_000, 140_000_000, 999_400_000, 999_500_000, 1e21))[1::2]
+    assert rate_cases == [("99.4", "KB/s"), ("99.5", "KB/s"), ("1.2", "MB/s"),
+                          ("12.3", "MB/s"), ("100", "MB/s"), ("140", "MB/s"),
+                          ("999", "MB/s"), ("1.0", "GB/s"), ("999", "PB/s")], rate_cases
 
-    # Fixed boxes: changing text fits without moving neighbors or changing font.
-    for number in ("--", "0.0", "0.1", "1.2", "8.8", "9.9", "10", "88", "99"):
-        assert widths[42](number) <= 65, (number, widths[42](number))
-        assert widths[22](number) <= 34, (number, widths[22](number))
+    # Exhaust all possible rounded strings, including wide 4s and decimal carries.
+    rates = ["--"] + [str(n) for n in range(1000)] + [f"{n / 10:.1f}" for n in range(1000)]
+    totals = ["--", "999+", "1000"] + [f"{n / 10:.1f}" for n in range(10000)]
+    assert max(widths["rate"](n) for n in rates) <= 70
+    assert max(widths[22](n) for n in rates) <= 53
+    assert max(widths[22](n) for n in totals) <= 65
+    assert max(widths[22](n + unit) for n in rates for unit in "BKMGTP") <= 76
     assert max(widths[12](unit) for unit in ("B/s", "KB/s", "MB/s", "GB/s", "TB/s", "PB/s")) <= 30
-    assert max(widths[22](number) for number in ("--", "999.9", "999+")) <= 60
     assert max(widths[12](unit) for unit in ("B", "KB", "MB", "GB", "TB", "PB")) <= 21
+    # Digit widths are equal in every numeric font, including the narrow digit 1.
+    for font in (22, 42, "rate"):
+        assert len({widths[font](str(n)) for n in range(10)}) == 1
 
     max_clock = max(widths[42](f"{hour:02}:{minute:02}:{second:02}", -2)
                     for hour in range(24) for minute in range(60) for second in range(60))
@@ -112,8 +125,8 @@ def main():
                          ("USAGE", 77), ("CPU", 72), ("GPU", 72), ("MEM", 72)):
         assert widths[12](title) <= width, title
     assert widths[22]("100%") <= 72
-    assert max(widths[22](value) for value in ("99", "100")) <= 38
-    assert widths[22]("49710") <= 64 and widths[12]("°C") <= 14
+    assert max(widths[22](value) for value in ("99", "100")) <= 45
+    assert widths[22]("49710") <= 75 and widths[12]("°C") <= 14
 
     source = (ROOT / "src/main.ino").read_text()
     update_rate = source.split("static void updateRateValue", 1)[1].split("void updateNetworkInfoLabel", 1)[0]
@@ -138,7 +151,7 @@ def main():
         "createDivider(10, 67, 220", "createDivider(5, 69, 230",
         "createDivider(5, 95, 230", "createDivider(5, 136, 230"))
     assert widths[42]("00:00:00", -2) == max_clock
-    print(f"PASS: {len(cases) * 2} formatter cases; fixed 112px rate cells; "
+    print(f"PASS: {len(cases) * 2} formatter cases; {len(rates)} rate strings, {len(totals)} totals; fixed digit advances; "
           f"all 86400 clock strings <= {max_clock}/182 px; 5px border bands fit.")
 
 

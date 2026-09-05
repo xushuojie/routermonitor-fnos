@@ -10,6 +10,7 @@ struct DeviceConfig
     char nasHost[65] = {0};
     uint16_t nasPort = 18199;
     char nasToken[129] = {0};
+    char adminPassword[33] = {0};
     uint8_t nightStartHour = 23;
     uint8_t nightEndHour = 7;
     uint8_t dayBrightness = 180;
@@ -22,8 +23,12 @@ bool loadDeviceConfig();
 bool saveDeviceConfig();
 void startConfigPortal();
 void handleConfigPortal();
+void stopConfigPortalAp();
 bool isConfigPortalStarted();
 bool isConfigPortalApMode();
 bool hasNasConfig();
+const char *configPortalApSsid();
+const char *configPortalApPassword();
+const char *configPortalAdminPasswordForSetup();
 
 #endif
