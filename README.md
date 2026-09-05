@@ -239,7 +239,7 @@ UPS 功率版本验收（2026-09-05）：14 项服务端测试、布局/功率�
 - CPU、内存、网络和运行时间来自宿主机只读挂载的 `/proc`、`/sys`
 - 首次默认选择当时发现的物理网卡，之后以网页保存的固定接口集合为准；可单选逻辑接口，已知上下层重复统计会被拒绝
 - 硬盘读写速率来自全部物理块设备的 Linux 计数器；RAID 会体现底层硬盘的实际 I/O
-- 总容量与已用容量来自显式只读挂载的 `/vol1`、`/vol2`，并按文件系统去重
+- 总容量与已用容量来自 `NAS_STATUS_STORAGE_PATHS` 指定并只读挂载的数据卷，按 `st_dev` 去重；模板仅包含 `/vol1`、`/vol2`，其他实际数据卷需同时补充挂载与路径配置（卷编号不一定连续，详见[容量配置](nas-docker/README.md#硬盘读写与存储容量)）
 - CPU 温度综合读取 thermal zone 与 hwmon，识别 Intel `coretemp`、AMD `k10temp/zenpower` 及常见 ARM CPU thermal
 - 最高硬盘温度合并内核 `drivetemp`/`nvme` hwmon 与 smartd 的新鲜 ATA 日志
 - GPU 使用率支持 Intel i915 debugfs 和 AMDGPU sysfs；NVIDIA 或未暴露指标的 GPU 标记为不可用，网页与 v2 固件显示 `--`

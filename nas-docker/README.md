@@ -207,7 +207,25 @@ SQLite 数据库位于 `/data/traffic.sqlite3`，Compose 的 `traffic-history` �
 
 `disk_io.read_speed` 和 `disk_io.write_speed` 是全部物理块设备在相邻两次状态采样间的合计字节速率。服务扫描 `/sys/class/block`，忽略分区、loop、device-mapper 和 md 等逻辑层，避免同时统计逻辑卷与底层硬盘。RAID1 等阵列会按每块物理盘的实际 I/O 合计，因此写入值可能高于应用层写入量。计数器不可读时 `valid` 为 `false`，速率返回 0。
 
-`storage` 汇总 `NAS_STATUS_STORAGE_PATHS` 指定的数据卷。Compose 默认把 fnOS 的 `/vol1`、`/vol2` 只读挂载到容器，并按 `st_dev` 去重后计算总容量和已用容量，避免同一文件系统的重复挂载或子卷被重复相加。`percent` 等于 `used / total × 100`。路径不可读或没有有效文件系统时，三个数值为 `null` 且 `valid` 为 `false`。只有一个数据卷时，应同时从 `compose.yml` 删除另一个挂载，并把 `NAS_STATUS_STORAGE_PATHS` 改为实际路径。
+`storage` 汇总 `NAS_STATUS_STORAGE_PATHS` 指定的数据卷。Compose 默认只挂载 `/vol1`、`/vol2`；程序对具有相同 `st_dev` 的路径去重，并计算总容量和已用容量。应配置实际数据卷根目录，不要混入系统分区、普通目录或子卷。`percent` 等于 `used / total × 100`。所有配置路径均不可用时，三个数值为 `null` 且 `valid` 为 `false`；部分路径缺失时会跳过，未配置的卷也不会自动发现，因此必须核对卷清单。
+
+**总容量偏小，先检查是否漏挂载存储卷。** 飞牛的卷编号不一定连续，例如三块数据卷可能是 `/vol1`、`/vol2`、`/vol4`。在 NAS 上用 `lsblk -o NAME,TYPE,SIZE,FSTYPE,MOUNTPOINTS` 查看实际挂载点，再用 `df -B1 /vol1 /vol2 /vol4` 核对。不要仅凭硬盘数量猜测卷编号。
+
+如果实际还存在 `/vol4`，需要同时完成两项配置：
+
+```yaml
+# compose.yml 中 nas-status 的 volumes 列表增加：
+- /vol4:/vol4:ro
+```
+
+```dotenv
+# .env 中列出全部实际数据卷：
+NAS_STATUS_STORAGE_PATHS=/vol1,/vol2,/vol4
+```
+
+执行 `docker compose up -d --force-recreate nas-status` 使挂载和环境变量生效，网页与小屏幕自动获取新容量，不需要重刷固件。只有一个数据卷时，也应同步删除多余挂载并缩小路径配置。
+
+容量采用文件系统 `statvfs` 口径，已用量为总量减 `f_bfree`，并非硬盘标称容量相加；系统分区、未分配空间以及 RAID 冗余不作为数据卷空间重复计入。界面使用十进制单位（1 TB = 10¹² 字节），与使用 TiB 的工具显示值可能不同。
 
 ## 环境变量
 
