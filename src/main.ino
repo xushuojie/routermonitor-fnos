@@ -202,7 +202,7 @@ static void serviceWiFi()
             setupLabel = lv_label_create(login_page, NULL);
             lv_label_set_long_mode(setupLabel, LV_LABEL_LONG_BREAK);
             lv_obj_set_style_local_text_font(setupLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
-            lv_obj_set_style_local_text_color(setupLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, lv_color_hex(0xf6f8fa));
+            lv_obj_set_style_local_text_color(setupLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, lv_color_hex(0xf2f5f7));
             lv_obj_set_width(setupLabel, 218);
             lv_obj_set_pos(setupLabel, 11, 42);
             lv_label_set_text_fmt(setupLabel, "WI-FI SETUP\n\n%s\nPassword: %s\n\nhttp://192.168.4.1", configPortalApSsid(), configPortalApPassword());
@@ -371,11 +371,12 @@ static void showCarouselLabel(lv_obj_t *label, const char *text, const lv_font_t
                               lv_coord_t width, lv_coord_t height, lv_label_align_t align)
 {
     setLabelText(label, text);
+    if (lv_obj_get_style_text_color(label, LV_LABEL_PART_MAIN).full != color.full)
+        lv_obj_set_style_local_text_color(label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, color);
     if (!carouselLayoutChanged)
         return;
     lv_obj_set_hidden(label, false);
     lv_obj_set_style_local_text_font(label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, font);
-    lv_obj_set_style_local_text_color(label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, color);
     lv_label_set_align(label, align);
     lv_obj_set_size(label, width, height);
     lv_obj_set_pos(label, x, y);
@@ -404,12 +405,19 @@ static void formatStorage(char *buffer, size_t size, double bytes)
         snprintf(buffer, size, "%s%c", text.number, text.unit[0]);
 }
 
+// Display warning thresholds, not hardware safety limits.
+static lv_color_t temperatureColor(double temperature, double warm, double hot)
+{
+    return lv_color_hex(!nasOnline || !isfinite(temperature) ? 0xdce4ea :
+                        temperature >= hot ? 0xff7185 : temperature >= warm ? 0xffc66d : 0xdce4ea);
+}
+
 static void renderCarousel()
 {
-    static const lv_color_t primary = lv_color_hex(0xf6f8fa);
-    static const lv_color_t muted = lv_color_hex(0xb9cad3);
-    static const lv_color_t secondary = lv_color_hex(0x8fa8b2);
-    static const lv_color_t green = lv_color_hex(0x45dfaa);
+    static const lv_color_t primary = lv_color_hex(0xf2f5f7);
+    static const lv_color_t muted = lv_color_hex(0xa9bac7);
+    static const lv_color_t secondary = lv_color_hex(0xa9bac7);
+    static const lv_color_t green = lv_color_hex(0x50ddb0);
     char first[20] = "--";
     char second[20] = "--";
     char third[20] = "--";
@@ -422,7 +430,7 @@ static void renderCarousel()
         hideCarouselContent();
         for (uint8_t index = 0; index < 4; ++index)
             lv_obj_set_style_local_bg_color(carousel_dots[index], LV_OBJ_PART_MAIN, LV_STATE_DEFAULT,
-                                            index == carouselPage ? lv_color_hex(0xd7e1e6) : lv_color_hex(0x48616a));
+                                            index == carouselPage ? lv_color_hex(0xdce4ea) : lv_color_hex(0x304451));
         renderedPage = carouselPage;
     }
 
@@ -483,13 +491,15 @@ static void renderCarousel()
             snprintf(second, sizeof(second), "%.0f", nasStatus.diskTemperature);
         showCarouselLabel(carousel_title[0], "CPU", &lv_font_montserrat_12, secondary,
                           0, -1, 115, 15, LV_LABEL_ALIGN_CENTER);
-        showCarouselLabel(carousel_value[0], first, &monitor_value_22, green,
+        showCarouselLabel(carousel_value[0], first, &monitor_value_22,
+                          temperatureColor(nasStatus.cpuTemperature, 75, 85),
                           31, 12, 45, 24, LV_LABEL_ALIGN_CENTER);
         showCarouselLabel(carousel_unit[0], "°C", &lv_font_montserrat_12, muted,
                           80, 20, 14, 15, LV_LABEL_ALIGN_LEFT);
         showCarouselLabel(carousel_title[1], "DISK MAX", &lv_font_montserrat_12, secondary,
                           115, -1, 115, 15, LV_LABEL_ALIGN_CENTER);
-        showCarouselLabel(carousel_value[1], second, &monitor_value_22, green,
+        showCarouselLabel(carousel_value[1], second, &monitor_value_22,
+                          temperatureColor(nasStatus.diskTemperature, 50, 60),
                           146, 12, 45, 24, LV_LABEL_ALIGN_CENTER);
         showCarouselLabel(carousel_unit[1], "°C", &lv_font_montserrat_12, muted,
                           195, 20, 14, 15, LV_LABEL_ALIGN_LEFT);
@@ -607,7 +617,7 @@ static void createMetric(const char *titleText, lv_coord_t left, lv_color_t colo
     lv_obj_t *title = lv_label_create(monitor_page, NULL);
     lv_label_set_text(title, titleText);
     lv_obj_set_style_local_text_font(title, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_montserrat_12);
-    lv_obj_set_style_local_text_color(title, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, lv_color_hex(0xf6f8fa));
+    lv_obj_set_style_local_text_color(title, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, lv_color_hex(0xdce4ea));
     lv_label_set_long_mode(title, LV_LABEL_LONG_CROP);
     lv_label_set_align(title, LV_LABEL_ALIGN_CENTER);
     lv_obj_set_size(title, 72, 15);
@@ -616,14 +626,14 @@ static void createMetric(const char *titleText, lv_coord_t left, lv_color_t colo
     value = lv_label_create(monitor_page, NULL);
     lv_label_set_text(value, "--");
     lv_obj_set_style_local_text_font(value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &monitor_value_22);
-    lv_obj_set_style_local_text_color(value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, lv_color_hex(0xf6f8fa));
+    lv_obj_set_style_local_text_color(value, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, lv_color_hex(0xdce4ea));
     lv_label_set_align(value, LV_LABEL_ALIGN_CENTER);
     lv_label_set_long_mode(value, LV_LABEL_LONG_CROP);
     lv_obj_set_size(value, 72, 24);
     lv_obj_set_pos(value, left, 203);
 
     bar = lv_bar_create(monitor_page, NULL);
-    styleMetricBar(bar, color, lv_color_hex(0x23414b));
+    styleMetricBar(bar, color, lv_color_hex(0x304451));
     lv_obj_set_pos(bar, left, 232);
 }
 
@@ -775,20 +785,20 @@ void setup()
     setupPages();
     initLoginPage();
 
-    const lv_color_t contentColor = lv_color_hex(0x061315);
+    const lv_color_t contentColor = lv_color_hex(0x101820);
     lv_obj_t *outer = lv_obj_create(monitor_page, NULL);
     lv_obj_clean_style_list(outer, LV_OBJ_PART_MAIN);
     lv_obj_set_style_local_bg_opa(outer, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_OPA_100);
     lv_obj_set_style_local_bg_color(outer, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, contentColor);
     lv_obj_set_size(outer, 240, 240);
 
-    const lv_color_t primaryColor = lv_color_hex(0xf6f8fa);
-    const lv_color_t mutedColor = lv_color_hex(0xb9cad3);
-    const lv_color_t secondaryColor = lv_color_hex(0x8fa8b2);
-    const lv_color_t red = lv_color_hex(0xff6670);
-    const lv_color_t blue = lv_color_hex(0x55c7f3);
-    const lv_color_t green = lv_color_hex(0x45dfaa);
-    const lv_color_t amber = lv_color_hex(0xf4bd62);
+    const lv_color_t primaryColor = lv_color_hex(0xf2f5f7);
+    const lv_color_t mutedColor = lv_color_hex(0xa9bac7);
+    const lv_color_t secondaryColor = lv_color_hex(0xa9bac7);
+    const lv_color_t red = lv_color_hex(0xff7185);
+    const lv_color_t blue = lv_color_hex(0x55cfff);
+    const lv_color_t green = lv_color_hex(0x50ddb0);
+    const lv_color_t amber = lv_color_hex(0xffc66d);
 
     lv_obj_t *content = lv_obj_create(monitor_page, NULL);
     lv_obj_clean_style_list(content, LV_OBJ_PART_MAIN);
@@ -950,7 +960,7 @@ void setup()
     setLabelText(time_label, "--:--:--");
     lv_obj_set_style_local_text_font(time_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &monitor_clock_42);
     lv_obj_set_style_local_text_letter_space(time_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, -2);
-    lv_obj_set_style_local_text_color(time_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
+    lv_obj_set_style_local_text_color(time_label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, primaryColor);
     lv_label_set_align(time_label, LV_LABEL_ALIGN_CENTER);
     lv_label_set_long_mode(time_label, LV_LABEL_LONG_CROP);
     lv_obj_set_size(time_label, 182, 46);
@@ -960,10 +970,10 @@ void setup()
     createMetric("GPU", 84, blue, gpu_value_label, gpu_bar);
     createMetric("MEM", 163, green, mem_value_label, mem_bar);
 
-    createDivider(10, 67, 220, lv_color_hex(0x23414b));
-    createDivider(5, 69, 230, lv_color_hex(0x173038));
-    createDivider(5, 95, 230, lv_color_hex(0x23414b));
-    createDivider(5, 136, 230, lv_color_hex(0x23414b));
+    createDivider(10, 67, 220, lv_color_hex(0x304451));
+    createDivider(5, 69, 230, lv_color_hex(0x304451));
+    createDivider(5, 95, 230, lv_color_hex(0x304451));
+    createDivider(5, 136, 230, lv_color_hex(0x304451));
 
     lv_task_create(task_cb, 20, LV_TASK_PRIO_MID, NULL);
     lv_task_create(net_task_cb, 20, LV_TASK_PRIO_HIGH, NULL);

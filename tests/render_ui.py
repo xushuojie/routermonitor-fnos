@@ -87,6 +87,17 @@ int main(int argc, char **argv) {
     updateMetric(gpu_bar,gpu_value_label,0,true);
     updateMetric(mem_bar,mem_value_label,48,true);
     for (int i=0;i<CHART_POINT_COUNT;i++) appendChartSample(6500000+1700000*sin(i*.41),1900000+1200000*sin(i*.6));
+    carouselPage=2;
+    const double cpuTemps[]={74,75,85,46,85};
+    const double diskTemps[]={49,50,60,39,60};
+    const unsigned colors[]={0xdce4ea,0xffc66d,0xff7185,0xdce4ea,0xdce4ea};
+    for(int i=0;i<5;i++) {
+        nasOnline=i!=4; nasStatus.cpuTemperature=cpuTemps[i]; nasStatus.diskTemperature=diskTemps[i];
+        renderCarousel();
+        for(int j=0;j<2;j++)
+            if(lv_obj_get_style_text_color(carousel_value[j],LV_LABEL_PART_MAIN).full != lv_color_hex(colors[i]).full) return 4;
+    }
+    nasOnline=true; nasStatus.cpuTemperature=46; nasStatus.diskTemperature=39;
     for (int page=0;page<5;page++) {
         carouselPage=page % 4;
         if(page==4) {
@@ -98,7 +109,7 @@ int main(int argc, char **argv) {
         char path[1024]; snprintf(path,sizeof(path),"%s/page-%d.ppm",argv[1],page);
         FILE *out=fopen(path,"wb"); fprintf(out,"P6\n240 240\n255\n");
         int borderErrors=0;
-        const uint32_t background=lv_color_to32(lv_color_hex(0x061315));
+        const uint32_t background=lv_color_to32(lv_color_hex(0x101820));
         for(int i=0;i<240*240;i++) {
             lv_color32_t c; c.full=lv_color_to32(frame[i]);
             const unsigned char rgb[]={c.ch.red,c.ch.green,c.ch.blue}; fwrite(rgb,1,3,out);
