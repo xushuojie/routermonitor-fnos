@@ -1,7 +1,8 @@
 FROM python:3.11-alpine
 
 WORKDIR /app
-COPY api.py traffic_history.py /app/
+COPY api.py traffic_history.py network_sources.py web.py /app/
+COPY web /app/web
 
 EXPOSE 18199
 ENTRYPOINT ["python3", "/app/api.py"]

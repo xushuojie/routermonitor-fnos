@@ -4,7 +4,7 @@
 
 一台基于 ESP8266 和 240 × 240 彩屏的 NAS 桌面监控小电视。设备通过 HTTP 长连接每秒获取 NAS 展示状态，同时每 200 毫秒获取共享网络采样，显示网络与硬盘读写速率、CPU/GPU/内存占用、时间及四页轮播信息。
 
-本项目基于 [404SynapseNotFound/routermonitor](https://github.com/404SynapseNotFound/routermonitor) 修改，数据源由 Netdata 改为随仓库提供的 NAS 状态服务，并增加了网页配网、Token 鉴权、夜间亮度和故障自动恢复。
+本项目基于 [404SynapseNotFound/routermonitor](https://github.com/404SynapseNotFound/routermonitor) 修改，数据源由 Netdata 改为随仓库提供的 NAS 状态服务，并增加了 NAS 网页控制台、设备网页配网、Token 鉴权、夜间亮度和故障自动恢复。
 
 ### 实机照片
 
@@ -14,6 +14,7 @@
 
 ![Router Monitor 功能亮点](images/feature-overview.png)
 
+- NAS 网页：实时概览、全量网卡发现、单卡/多卡统计、别名、拓扑校验、配置导入导出与管理员登录
 - `/status?display=1&v=2` 每 1 秒刷新 CPU、GPU、内存、硬盘读写和运行时间；温度每 5 秒、容量每 30 秒、滚动流量每 5 秒采样
 - `/net?v=2` 每 200 毫秒更新红色上传、蓝色下载折线，实时网速数字约每 1 秒更新；请求失败后退避重试，恢复后回到目标周期
 - 实时网速使用固定 42px 窄体数字，`HH:MM:SS` 使用固定 42px 原比例数字；等宽数字减少跳动，保留 5px 内容留白，四周与界面背景同色
@@ -33,7 +34,7 @@
 .
 ├─ include/TFT_eSPI_Setup.h  # 屏幕驱动与引脚
 ├─ src/                      # ESP8266 固件和字体资源
-├─ nas-docker/               # NAS 状态 API、Dockerfile、Compose
+├─ nas-docker/               # NAS API、网页控制台、Dockerfile、Compose
 ├─ platformio.ini            # PlatformIO 构建配置
 └─ images/                   # 项目图片
 ```
@@ -65,7 +66,7 @@ cp .env.example .env
 
 编辑 `.env`：
 
-- `NAS_STATUS_IFACE`：默认 `physical`，合计宿主机全部物理网卡；也可设为 `auto` 或具体接口名
+- `NAS_STATUS_IFACE`：首次启动默认 `physical`，固定选择当时发现的物理网卡；以后通过网页选择单卡或多卡，新网卡不会自动加入
 - `NAS_STATUS_PORT`：对局域网开放的端口，默认 `18199`
 - `NAS_STATUS_TOKEN`：长随机 Token，可用 `openssl rand -hex 32` 生成
 
@@ -79,6 +80,24 @@ curl -H "Authorization: Bearer 你的Token" http://NAS局域网IP:18199/status
 ```
 
 详细说明见 [nas-docker/README.md](nas-docker/README.md)。不建议把该端口直接暴露到公网；优先在可信局域网、VPN 或防火墙白名单内使用。
+
+### 打开 NAS 网页控制台
+
+访问 `http://NAS局域网IP:18199/`。这是 NAS 服务的管理网页，与 ESP8266 的配网页面不同。
+
+首次启动会生成独立管理员密码；按仓库 Compose 模板部署时可读取：
+
+```bash
+docker compose exec nas-status cat /data/initial-admin-password.txt
+```
+
+也可在首次启动前设置 `NAS_STATUS_ADMIN_PASSWORD`（至少 12 个字符）。登录后在“设备与设置”中更改密码，原有 ESP Token 不受影响。
+
+- **数据概览**：网络曲线、上下行和磁盘速率、功率、CPU/GPU/内存、24h 流量、容量、温度、运行时间及实际来源。
+- **网络数据源**：默认显示物理端口，可展开虚拟接口、搜索、设置别名和查看原始计数/丢包/历史。选择后先预览，点击“应用设置”才会生效；不会修改 NAS 的 IP、网卡或路由。
+- **设备与设置**：显示端连接状态、只读 Token、配置导入导出、脱敏诊断和管理员密码。
+
+模板使用 host 网络获取宿主接口，端口由 `NAS_STATUS_PORT` 指定。设置、管理员密码哈希与逐接口历史持久化在原数据卷；升级保留旧组合历史。当前只有网络来源可在网页中选择，其他指标沿用自动检测和部署时的挂载配置，来源与不可用状态可在概览核对。
 
 ## 2. 编译和烧录固件
 

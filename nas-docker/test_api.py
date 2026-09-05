@@ -2,6 +2,7 @@ import importlib.util
 import http.client
 import json
 import os
+import sys
 import tempfile
 import threading
 import unittest
@@ -12,6 +13,7 @@ from unittest.mock import Mock, patch
 
 SPEC = importlib.util.spec_from_file_location("nas_status_api", Path(__file__).with_name("api.py"))
 api = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = api
 SPEC.loader.exec_module(api)
 
 

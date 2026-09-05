@@ -15,8 +15,9 @@ services:
       NAS_STATUS_HISTORY_DB: /data/traffic.sqlite3
       NAS_STATUS_SMART_MAX_AGE_SECONDS: ${NAS_STATUS_SMART_MAX_AGE_SECONDS:-7200}
       NAS_STATUS_TOKEN: ${NAS_STATUS_TOKEN:?Set NAS_STATUS_TOKEN in .env}
-    ports:
-      - "${NAS_STATUS_PORT:-18199}:18199"
+      NAS_STATUS_ADMIN_PASSWORD: ${NAS_STATUS_ADMIN_PASSWORD:-}
+    network_mode: host
+    command: ["--port", "${NAS_STATUS_PORT:-18199}"]
     volumes:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro

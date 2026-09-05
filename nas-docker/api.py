@@ -2,6 +2,8 @@
 """Small, dependency-free host metrics API for Router Monitor."""
 
 import argparse
+from contextlib import nullcontext
+import sys
 import hashlib
 from collections import deque
 import glob
@@ -33,6 +35,7 @@ SMART_ROOT = os.environ.get("SMART_ROOT", "/host/smartmontools")
 SMART_MAX_AGE_SECONDS = int(os.environ.get("NAS_STATUS_SMART_MAX_AGE_SECONDS", "7200"))
 SMART_TAIL_BYTES = 65536
 _smart_temperature_cache = {}
+NETWORK_SOURCES = None
 _network_lock = threading.Lock()
 _network_previous = {}
 _network_epoch = time.time_ns()
@@ -289,6 +292,8 @@ def detect_network_interface():
 
 
 def selected_network_interfaces():
+    if NETWORK_SOURCES is not None:
+        return NETWORK_SOURCES.selected()
     if (CONFIGURED_IFACE.lower() or "physical") == "physical":
         interfaces = physical_interface_names()
         return "physical:" + ",".join(interfaces), interfaces
@@ -317,9 +322,9 @@ def network_counters(interfaces):
 
 def network_snapshot(include_counters=False):
     global _network_previous, _network_epoch
-    with _network_lock:
+    with _network_lock, (NETWORK_SOURCES.lock if NETWORK_SOURCES is not None else nullcontext()):
         interface, interfaces = selected_network_interfaces()
-        counters = network_counters(interfaces)
+        counters = NETWORK_SOURCES.counters(interfaces) if NETWORK_SOURCES is not None else network_counters(interfaces)
         if counters is None:
             _network_previous = {}
             _network_epoch += 1
@@ -342,7 +347,9 @@ def network_snapshot(include_counters=False):
 
 
 def traffic_sample(provider=network_snapshot):
-    snapshot = provider(include_counters=True)
+    if NETWORK_SOURCES is not None:
+        NETWORK_SOURCES.record_history()
+    snapshot = NETWORK_SOURCES.legacy_snapshot() if NETWORK_SOURCES is not None else provider(include_counters=True)
     boot_id = read_text(host_path(PROC_ROOT, "/proc/sys/kernel/random/boot_id"))
     if snapshot is None or not boot_id:
         return None
@@ -363,6 +370,8 @@ class NetworkMonitor:
         self.baseline = None
 
     def sample(self):
+        if NETWORK_SOURCES is not None:
+            NETWORK_SOURCES.collect()
         current = network_snapshot(include_counters=True)
         with self.lock:
             previous = self.current
@@ -399,7 +408,7 @@ class NetworkMonitor:
             return {key: value for key, value in self.current.items()
                     if include_counters or key != "counters"}
 
-    def response(self, since=0, epoch=""):
+    def response(self, since=0, epoch="", limit=4):
         with self.lock:
             if self.current is None:
                 return None
@@ -407,11 +416,11 @@ class NetworkMonitor:
             if age > 1:
                 return None
             same = epoch == self.epoch and 0 <= since <= self.sequence
-            pending = [point for point in self.samples if point[0] > since] if same else list(self.samples)[-1:]
-            gap = not same or (pending and pending[0][0] != since + 1) or len(pending) > 4
+            pending = [point for point in self.samples if point[0] > since] if same else list(self.samples)[-(limit if limit > 4 else 1):]
+            gap = not same or (pending and pending[0][0] != since + 1) or len(pending) > limit
             return {"v": 2, "source": hashlib.sha256(self.current["iface"].encode()).hexdigest()[:16],
                     "epoch": self.epoch, "seq": self.sequence, "age": round(age, 3),
-                    "rate": self.average, "points": pending[-4:], "gap": bool(gap)}
+                    "rate": self.average, "points": pending[-limit:], "gap": bool(gap)}
 
     def run(self):
         if self.stop.wait(.2):
@@ -642,7 +651,7 @@ class Metrics:
     def snapshot(self, force=False):
         now = time.monotonic()
         if not force and self.cached is not None and 0 <= now - self.sampled_at < 1:
-            return {**self.cached, "traffic_24h": self.traffic_history.snapshot(), "ups": self.ups.snapshot(now)}
+            return {**self.cached, "traffic_24h": self.history_snapshot(), "ups": self.ups.snapshot(now)}
         current_cpu = cpu_sample()
         cpu_percent = 0.0
         cpu_valid = False
@@ -735,13 +744,17 @@ class Metrics:
             "storage": self.cached_storage,
             "ups": self.ups.snapshot(now),
             "uptime": uptime_seconds(),
-            "traffic_24h": self.traffic_history.snapshot(),
+            "traffic_24h": self.history_snapshot(),
         }
         self.sampled_at = now
         self.sequence += 1
         self.published = (self.cached, now, self.sequence, self.temperatures_at, self.storage_at)
         return self.cached
 
+
+    def history_snapshot(self):
+        legacy = self.traffic_history.snapshot()
+        return NETWORK_SOURCES.history(legacy) if NETWORK_SOURCES is not None else legacy
 
     def read_snapshot(self):
         # Readers never trigger hardware I/O. Assignment publishes a complete snapshot.
@@ -750,7 +763,7 @@ class Metrics:
             return None
         cached, sampled_at, sequence, temperatures_at, storage_at = published
         now = time.monotonic()
-        result = {**cached, "traffic_24h": self.traffic_history.snapshot(),
+        result = {**cached, "traffic_24h": self.history_snapshot(),
                   "ups": self.ups.snapshot(now), "v": 2, "seq": sequence,
                   "age": round(max(0, now - sampled_at), 3),
                   "metric_age": {"temperature": round(max(0, now - temperatures_at), 1),
@@ -791,7 +804,7 @@ def resolve_token():
     return token or os.environ.get("NAS_STATUS_TOKEN", "").strip()
 
 
-def handler_factory(metrics, token, network=None):
+def handler_factory(metrics, token, network=None, web=None):
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -802,6 +815,8 @@ def handler_factory(metrics, token, network=None):
             self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
         def do_GET(self):
+            if web is not None and web.handle(self):
+                return
             request = urlsplit(self.path)
             path = request.path
             query = parse_qs(request.query)
@@ -814,6 +829,8 @@ def handler_factory(metrics, token, network=None):
             if not token or not hmac.compare_digest(supplied, "Bearer " + token):
                 self.close_connection = True
                 return self.respond(401, {"error": "unauthorized"})
+            if web is not None:
+                web.device_seen(self.client_address[0])
             if path == "/net":
                 if version2 and network is not None:
                     try:
@@ -852,6 +869,13 @@ def handler_factory(metrics, token, network=None):
                 snapshot.update(metadata)
             return self.respond(200, snapshot)
 
+        def do_POST(self):
+            if web is None or not web.handle(self):
+                self.close_connection = True
+                self.respond(404, {"error": "not found"})
+
+        do_PUT = do_POST
+
         def respond(self, status, payload):
             body = json.dumps(payload, separators=(",", ":")).encode()
             self.send_response(status)
@@ -864,7 +888,7 @@ def handler_factory(metrics, token, network=None):
             self.wfile.write(body)
 
         def log_message(self, message, *args):
-            if self.path.split("?", 1)[0] == "/net" and len(args) > 1 and str(args[1]) == "200":
+            if self.command == "GET" and self.path.split("?", 1)[0] in ("/net", "/status", "/api/overview", "/api/network/stream", "/api/network/interfaces", "/api/capabilities", "/api/session") and len(args) > 1 and str(args[1]) == "200":
                 return
             print("%s - %s" % (self.address_string(), message % args), flush=True)
 
@@ -872,22 +896,29 @@ def handler_factory(metrics, token, network=None):
 
 
 def main():
-    global _network_previous, _network_epoch
+    global _network_previous, _network_epoch, NETWORK_SOURCES
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=18199)
+    parser.add_argument("--bind", default=os.environ.get("NAS_STATUS_BIND", "0.0.0.0"))
     args = parser.parse_args()
     token = resolve_token()
     if not token:
         raise SystemExit("NAS_STATUS_TOKEN or NAS_STATUS_TOKEN_FILE is required")
+    data_dir = os.path.dirname(os.environ.get("NAS_STATUS_HISTORY_DB", DEFAULT_HISTORY_DB))
+    from network_sources import Sources
+    from web import WebApp
+    NETWORK_SOURCES = Sources(sys.modules[__name__], data_dir)
     network = NetworkMonitor()
     history = TrafficHistory(os.environ.get("NAS_STATUS_HISTORY_DB", DEFAULT_HISTORY_DB),
                              lambda: traffic_sample(network.latest))
     if history.previous and history.previous[5]:
         _network_previous = history.previous[5]["values"]
         _network_epoch = int(history.previous[5]["epoch"])
+        NETWORK_SOURCES.legacy_epoch = _network_epoch
     network.start()
     metrics = Metrics(history, network)
-    server = ThreadingHTTPServer(("0.0.0.0", args.port), handler_factory(metrics, token, network))
+    web = WebApp(NETWORK_SOURCES, metrics, data_dir)
+    server = ThreadingHTTPServer((args.bind, args.port), handler_factory(metrics, token, network, web))
     metrics.ups.start()
     history.start()
     metrics.start()
@@ -900,6 +931,8 @@ def main():
         history.close()
         network.close()
         metrics.ups.close()
+        NETWORK_SOURCES.close()
+        NETWORK_SOURCES = None
 
 
 if __name__ == "__main__":

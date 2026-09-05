@@ -1,6 +1,6 @@
 # NAS Docker 状态服务
 
-这是给 ESP8266 Router Monitor 使用的无第三方 Python 依赖状态 API。服务只读取宿主机指标，并返回体积较小的 JSON。
+这是供飞牛 / Linux NAS 与 ESP8266 Router Monitor 使用的监控服务，包含原生 HTML/CSS/JavaScript 网页和无第三方 Python 依赖的 API。服务读取宿主指标，只保存监控配置及统计历史，不修改实际网卡或路由。
 
 ## 快速部署
 
@@ -21,6 +21,62 @@ curl -H "Authorization: Bearer $NAS_STATUS_TOKEN" http://127.0.0.1:18199/net
 ```
 
 `.env` 不会被 Git 跟踪。请勿把真实 Token 写入 Compose 或截图。
+
+## 网页控制台
+
+打开 `http://NAS局域网IP:18199/`，使用独立管理员密码登录。未设置 `NAS_STATUS_ADMIN_PASSWORD` 时，首次启动自动生成密码并写入数据目录 `initial-admin-password.txt`（权限 600）；仓库模板读取命令：
+
+```bash
+docker compose exec nas-status cat /data/initial-admin-password.txt
+```
+
+数据目录由 `NAS_STATUS_HISTORY_DB` 所在目录决定：仓库模板为 `/data`；旧版 `/app/data/traffic.sqlite3` 部署仍使用 `/app/data`。已有数据卷不要删除。管理员密码只在首次引导时读取环境变量，后续在网页修改；修改后删除初始密码文件并使全部网页会话失效，ESP Token 保持不变。
+
+### 页面与网络选择
+
+1. **数据概览**：实时指标、近 30 秒浏览曲线（初次可载入服务端最近 10 秒）、每项来源与传感器、数据年龄和不可用状态。CPU/GPU/MEM 缺失分别显示不可用。
+2. **网络数据源**：物理接口优先，全部虚拟接口可展开/搜索；详情含 ifindex、MAC/永久 MAC、硬件路径、驱动、链路、IP、原始字节、丢包/错误、逐卡 24h 和观测覆盖。
+3. **设备与设置**：最近显示端状态、接入地址和只读 Token、配置导入导出、脱敏诊断、密码修改。Token 只有主动点击才显示。
+
+选择“推荐物理端口”“单个接口”或“多个接口合计”，预览后点击“应用设置”。保存时再次验证身份、可读性、拓扑和 revision；其他网页已修改时返回 409，保留本页未保存内容。别名最多 40 字符。导入先进入预览，不直接覆盖配置。
+
+已知 bond/bridge/VLAN 与成员、父接口混选会被拒绝。无法完整验证的 Open vSwitch 混合选择也会被拒绝；可单独选 OVS 接口或选择物理端口层。网桥自身计数不等于全部转发流量。其他虚拟接口提示其统计范围，接口合计不代表逐包去重、也不等于互联网有效流量。
+
+保存后固定设备集合，新网卡不会自动加入。物理身份结合硬件路径、永久 MAC（未提供时使用当前 MAC）和设备类型；虚拟身份使用 NAS 启动标识、ifindex、MAC 和类型。接口改名可跟随身份；身份不能可靠匹配时保留缺失成员等待重新绑定。选中成员消失或不可读，合计失效，其他卡的独立读数仍可查看；未插线且计数可读可如实显示 0。
+
+### 宿主网络与性能
+
+Compose 使用 `network_mode: host`，无需端口映射。每 200ms 通过只读 rtnetlink dump 批量读取网卡计数；地址、驱动、协商速率等详情约每 5 秒刷新，不为每张卡启动命令。优先核对网络命名空间 inode；飞牛限制此访问时，交叉核对宿主物理网卡的名称、ifindex 和 MAC。核对失败降级读取宿主 sysfs，并明确提示 IP / 拓扑不完整，不允许未经验证的多虚拟接口合并。不需要 privileged、Docker socket 或额外网卡管理权限。
+
+网页概览和每卡数字约 1 秒更新，曲线目标 200ms；客户端只读取共享快照。其他磁盘、容量、温度、GPU 和 UPS 仍使用现有自动采集方式及挂载；本版未增加它们的手动来源选择，也不承诺所有 GPU / UPS 驱动均已支持。
+
+### 持久化与迁移
+
+- `settings.json`：版本、固定成员、别名及旧组合来源；文件原子替换并同步落盘。
+- `admin.json`：PBKDF2-SHA256 密码哈希和随机盐，不保存明文管理员密码。
+- `interfaces.sqlite3`：逐接口增量和有效时间段，每 5 秒批量写入，保留滚动 24h；连续零流量区间合并，仍保留覆盖时间。
+- 原 `traffic.sqlite3` 继续采集升级前的固定组合。切换小屏幕范围不会停止或清空旧组合历史；切回原成员可继续展示它。
+
+新组合的 24h 只计算所有成员共同有效的时间区间，并按边界比例分摊；不会把升级前的组合总量拆成单卡历史。每卡历史从升级采集时开始，界面明确显示覆盖时长。单卡计数回退即使随后合计增加也会中断该区间；NAS 重启、成员缺失和超过 10 秒的采样间隔不会补造数据。只改变别名或统计模式但成员不变时不清除历史。
+
+### 网页 API 与认证
+
+`/` 现在返回网页；读取 JSON 请使用原 `/status`。ESP `/net` 和 `/status?display=1&v=2` 保持不变，已有固件无需重刷。
+
+| 路由 | 用途 |
+| --- | --- |
+| `GET /api/session`、`POST /api/login`、`POST /api/logout` | 网页会话 |
+| `GET /api/overview` | 网页概览与来源 |
+| `GET /api/network/interfaces` | 逐接口数据、拓扑、历史与当前选择 |
+| `GET /api/network/stream` | 网页曲线，支持 since/epoch |
+| `POST /api/network/preview` | 只验证和预览候选配置 |
+| `GET /api/settings`、`PUT /api/settings` | 读取 / 保存（需当前 revision） |
+| `GET /api/capabilities`、`GET /api/device-access` | 能力、显示端状态、只读 Token |
+| `PUT /api/password` | 核对当前密码后更新管理员密码 |
+
+管理员会话为内存中的 8 小时 HttpOnly / SameSite=Strict Cookie，服务重启后需重新登录。写请求检查同源 Origin、CSRF Token、JSON 格式和 32KiB 上限。ESP Bearer Token 不能创建管理员会话或写配置。静态资源带 CSP / nosniff，界面通过 textContent 展示数据。同一来源连续失败 8 次后暂停登录一分钟。
+
+本次验证覆盖 20 项服务端测试、真实浏览器登录/单口保存/双口恢复/详情/手机版无横向溢出，以及重启配置持久化。拓扑冲突、计数回退和身份改名由可运行测试覆盖；未在真实 NAS 上创建 bond/VLAN 或拔插网卡。当前实机网页发现 77 个接口，默认仍为两张物理网卡；ESP 376 次连续请求无失败。
 
 ## API
 
@@ -103,7 +159,7 @@ curl -H "Authorization: Bearer $NAS_STATUS_TOKEN" http://127.0.0.1:18199/net
 
 ### 近 24 小时流量
 
-后台每 5 秒采样所选网卡的累计字节数，独立于 HTTP 请求；小电视断开时仍继续记录。默认 `physical` 会聚合宿主机 `/sys/class/net/<名称>/device` 存在的全部物理网卡，并忽略 bridge、OVS、Docker、VPN 等虚拟接口，避免重复计算。`rx_bytes` 是下载总字节数，`tx_bytes` 是上传总字节数，包含局域网传输。窗口截至最近一次采样，向前滚动 86400 秒，数据通常延迟 0–5 秒，不在零点清零。
+后台每 5 秒采样所选网卡的累计字节数，独立于 HTTP 请求；小电视断开时仍继续记录。首次启动的默认 `physical` 会选择宿主机 `/sys/class/net/<名称>/device` 存在的全部物理网卡，并忽略 bridge、OVS、Docker、VPN 等虚拟接口，避免重复计算。`rx_bytes` 是下载总字节数，`tx_bytes` 是上传总字节数，包含局域网传输。窗口截至最近一次采样，向前滚动 86400 秒，数据通常延迟 0–5 秒，不在零点清零。
 
 `coverage_seconds` 只累计窗口内确实观测到的时间：首次部署约 5 秒后才有第一个有效区间，不会从网卡开机累计量补造过去 24 小时。固件在覆盖不足 24 小时时显示已记录时长；无可用区间、采样失败或最新样本超过 10 秒时，`valid` 为 `false`，两个总量为 `null`，显示 `--`。
 
@@ -126,7 +182,8 @@ SQLite 数据库位于 `/data/traffic.sqlite3`，Compose 的 `traffic-history` �
 | 名称 | 默认值 | 说明 |
 | --- | --- | --- |
 | `NAS_STATUS_IFACE` | `physical` | 聚合全部物理网卡；也可设为 `auto` 或具体接口名 |
-| `NAS_STATUS_PORT` | `18199` | Compose 发布端口 |
+| `NAS_STATUS_PORT` | `18199` | host 网络下服务监听端口 |
+| `NAS_STATUS_ADMIN_PASSWORD` | 自动生成 | 仅首次引导的网页管理员密码，至少 12 字符 |
 | `NAS_STATUS_TOKEN` | 无 | 必填鉴权 Token |
 | `NAS_STATUS_STORAGE_PATHS` | `/vol1,/vol2` | 逗号分隔的容器内 fnOS 数据卷根目录；必须与只读挂载一致 |
 | `NAS_STATUS_HISTORY_DB` | `api.py` 同目录下的 `data/traffic.sqlite3` | 流量历史数据库；仓库 Compose 显式设为 `/data/traffic.sqlite3` |
