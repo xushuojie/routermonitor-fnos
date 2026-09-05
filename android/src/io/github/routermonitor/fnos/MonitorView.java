@@ -109,8 +109,8 @@ final class MonitorView extends View {
         disk(c,322,"W 写入",metric("disk_io","write_speed",true),GOLD);
         Date wall=new Date(serverClock>0?serverClock+now-clockAt:System.currentTimeMillis());
         String hours=hm.format(wall);
-        text(c,hours,616,145,80,TEXT);paint.setTextSize(80);float width=paint.measureText(hours);
-        text(c,seconds.format(wall),616+width+3,145,32,MUTED);
+        text(c,hours,616,150,96,TEXT);paint.setTextSize(96);float width=paint.measureText(hours);
+        text(c,seconds.format(wall),616+width+3,150,40,MUTED);
         text(c,date.format(wall),616,194,20,MUTED);
         if(now-pageAt>=5000){nextPage(now);}
         panel(c,616,236,320,144);
@@ -127,7 +127,7 @@ final class MonitorView extends View {
     }
     void speed(Canvas c,float x,String label,double n,int color) {
         String[] parts=DisplayMath.amount(n,true);
-        text(c,label,x,84,20,color);right(c,parts[1],x+274,84,20,MUTED);
+        text(c,label,x,84,20,color);right(c,parts[1],x+274,84,28,MUTED);
         text(c,parts[0],x,160,76,TEXT);
     }
     void disk(Canvas c,float x,String label,double n,int color) {
