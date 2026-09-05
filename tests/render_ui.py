@@ -2,7 +2,7 @@
 """Render the real main.ino UI with host LVGL, replacing only device I/O.
 
 Requires a C/C++ compiler and the installed PlatformIO LVGL sources. Outputs
-four 240x240 PPM frames; host memory usage is not a device benchmark.
+five 240x240 PPM frames; host memory usage is not a device benchmark.
 """
 import argparse
 from concurrent.futures import ThreadPoolExecutor
@@ -98,11 +98,12 @@ int main(int argc, char **argv) {
         char path[1024]; snprintf(path,sizeof(path),"%s/page-%d.ppm",argv[1],page);
         FILE *out=fopen(path,"wb"); fprintf(out,"P6\n240 240\n255\n");
         int borderErrors=0;
+        const uint32_t background=lv_color_to32(lv_color_hex(0x061315));
         for(int i=0;i<240*240;i++) {
             lv_color32_t c; c.full=lv_color_to32(frame[i]);
             const unsigned char rgb[]={c.ch.red,c.ch.green,c.ch.blue}; fwrite(rgb,1,3,out);
             int x=i%240,y=i/240;
-            if((x<5||x>=235||y<5||y>=235) && (rgb[0]||rgb[1]||rgb[2])) { if(!borderErrors) fprintf(stderr,"Border pixel %d,%d rgb %d,%d,%d\n",x,y,rgb[0],rgb[1],rgb[2]); borderErrors++; }
+            if((x<5||x>=235||y<5||y>=235) && c.full != background) { if(!borderErrors) fprintf(stderr,"Border pixel %d,%d rgb %d,%d,%d\n",x,y,rgb[0],rgb[1],rgb[2]); borderErrors++; }
         }
         fclose(out);
         if(borderErrors) return 3;
@@ -123,7 +124,7 @@ int main(int argc, char **argv) {
         binary = build / "preview"
         subprocess.run(["c++", "-std=c++11", *flags, str(cpp), *objects, "-o", str(binary)], check=True)
         subprocess.run([str(binary), str(output)], check=True)
-    print(f"Rendered five actual LVGL frames; all 5px border pixels are black: {output}")
+    print(f"Rendered five actual LVGL frames; all 5px edge pixels match the background: {output}")
 
 
 if __name__ == "__main__":

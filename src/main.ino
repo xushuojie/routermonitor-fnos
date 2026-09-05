@@ -775,13 +775,13 @@ void setup()
     setupPages();
     initLoginPage();
 
+    const lv_color_t contentColor = lv_color_hex(0x061315);
     lv_obj_t *outer = lv_obj_create(monitor_page, NULL);
     lv_obj_clean_style_list(outer, LV_OBJ_PART_MAIN);
     lv_obj_set_style_local_bg_opa(outer, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_OPA_100);
-    lv_obj_set_style_local_bg_color(outer, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_BLACK);
+    lv_obj_set_style_local_bg_color(outer, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, contentColor);
     lv_obj_set_size(outer, 240, 240);
 
-    const lv_color_t contentColor = lv_color_hex(0x061315);
     const lv_color_t primaryColor = lv_color_hex(0xf6f8fa);
     const lv_color_t mutedColor = lv_color_hex(0xb9cad3);
     const lv_color_t secondaryColor = lv_color_hex(0x8fa8b2);
