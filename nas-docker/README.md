@@ -70,11 +70,11 @@ docker compose exec nas-status cat /data/initial-admin-password.txt
 2. **网络数据源**：物理接口优先，全部虚拟接口可展开/搜索；详情含 ifindex、MAC/永久 MAC、硬件路径、驱动、链路、IP、原始字节、丢包/错误、逐卡 24h 和观测覆盖。
 3. **设备与设置**：最近显示端状态、接入地址和只读 Token、配置导入导出、脱敏诊断、密码修改。Token 只有主动点击才显示。
 
-选择“推荐物理端口”“单个接口”或“多个接口合计”，预览后点击“应用设置”。保存时再次验证身份、可读性、拓扑和 revision；其他网页已修改时返回 409，保留本页未保存内容。别名最多 40 字符。导入先进入预览，不直接覆盖配置。
+选择“自动发现物理端口”“固定物理端口”“单个接口”或“多个接口合计”，预览后点击“应用设置”。保存时再次验证身份、可读性、拓扑和 revision；其他网页已修改时返回 409，保留本页未保存内容。别名最多 40 字符。导入先进入预览，不直接覆盖配置。
 
 已知 bond/bridge/VLAN 与成员、父接口混选会被拒绝。无法完整验证的 Open vSwitch 混合选择也会被拒绝；可单独选 OVS 接口或选择物理端口层。网桥自身计数不等于全部转发流量。其他虚拟接口提示其统计范围，接口合计不代表逐包去重、也不等于互联网有效流量。
 
-保存后固定设备集合，新网卡不会自动加入。物理身份结合硬件路径、永久 MAC（未提供时使用当前 MAC）和设备类型；虚拟身份使用 NAS 启动标识、ifindex、MAC 和类型。接口改名可跟随身份；身份不能可靠匹配时保留缺失成员等待重新绑定。选中成员消失或不可读，合计失效，其他卡的独立读数仍可查看；未插线且计数可读可如实显示 0。
+“自动发现物理端口”模式跟随设备增减，集合变化后重新建立速率基线，并按新集合的共同历史覆盖计算 24 小时流量，不伪造新增网卡的过去数据。固定物理端口、单卡、多卡模式仍固定成员，新网卡不会自动加入。物理身份结合硬件路径、永久 MAC（未提供时使用当前 MAC）和设备类型；虚拟身份使用 NAS 启动标识、ifindex、MAC 和类型。接口改名可跟随身份；身份不能可靠匹配时保留缺失成员等待重新绑定。选中成员消失或不可读，合计失效，其他卡的独立读数仍可查看；未插线且计数可读可如实显示 0。
 
 ### 宿主网络与性能
 
@@ -207,23 +207,17 @@ SQLite 数据库位于 `/data/traffic.sqlite3`，Compose 的 `traffic-history` �
 
 `disk_io.read_speed` 和 `disk_io.write_speed` 是全部物理块设备在相邻两次状态采样间的合计字节速率。服务扫描 `/sys/class/block`，忽略分区、loop、device-mapper 和 md 等逻辑层，避免同时统计逻辑卷与底层硬盘。RAID1 等阵列会按每块物理盘的实际 I/O 合计，因此写入值可能高于应用层写入量。计数器不可读时 `valid` 为 `false`，速率返回 0。
 
-`storage` 汇总 `NAS_STATUS_STORAGE_PATHS` 指定的数据卷。Compose 默认只挂载 `/vol1`、`/vol2`；程序对具有相同 `st_dev` 的路径去重，并计算总容量和已用容量。应配置实际数据卷根目录，不要混入系统分区、普通目录或子卷。`percent` 等于 `used / total × 100`。所有配置路径均不可用时，三个数值为 `null` 且 `valid` 为 `false`；部分路径缺失时会跳过，未配置的卷也不会自动发现，因此必须核对卷清单。
+`NAS_STATUS_STORAGE_PATHS` 默认为空：`storage-discovery` 隔离容器每 30 秒读取宿主机挂载表，自动发现 `/vol数字` 根挂载点（编号允许跳跃），支持 btrfs/ext4/xfs/zfs 数据卷。排除系统分区、Docker 子挂载、网络共享和未挂载磁盘；按文件系统身份去重，btrfs 子卷共享容量不会重复相加。逐卷核对容器与宿主机挂载表中的设备号、来源和根路径，防止新挂载未传播时误读底层目录容量。
 
-**总容量偏小，先检查是否漏挂载存储卷。** 飞牛的卷编号不一定连续，例如三块数据卷可能是 `/vol1`、`/vol2`、`/vol4`。在 NAS 上用 `lsblk -o NAME,TYPE,SIZE,FSTYPE,MOUNTPOINTS` 查看实际挂载点，再用 `df -B1 /vol1 /vol2 /vol4` 核对。不要仅凭硬盘数量猜测卷编号。
+网页概览展开“数据来源”可看到每个卷的路径、文件系统、已用/总量、是否去重和失败原因。任一发现的卷不可读，合计返回 `null` / `valid:false`；采集器停止超过 90 秒也失效。采集和展示各有 30 秒缓存，卷变化通常在 60 秒内反映，不需要重新烧录 ESP。
 
-如果实际还存在 `/vol4`，需要同时完成两项配置：
+新模板同时启动两个容器：公开 API 不挂载数据卷，仅只读接收容量 JSON；采集器无网络、以 UID/GID 65534 运行、移除全部 capabilities，仅读取挂载元数据和 `statvfs`，不遍历用户文件。采集器通过宿主根目录的 `ro,rslave` bind 接收新挂载。宿主根挂载须支持 shared/slave 传播；不支持时 Docker 会启动失败，应先核对 `findmnt -o TARGET,PROPAGATION /`，不要用 privileged 绕过。
 
-```yaml
-# compose.yml 中 nas-status 的 volumes 列表增加：
-- /vol4:/vol4:ro
-```
+注意 Docker 对递归只读和未来子挂载的保证依赖内核与挂载传播方式，不能仅凭 `:ro` 宣称所有新子挂载永远只读。因此宿主根目录仅交给无网络的隔离采集器，**不要把 `/hostfs` 挂到公网 API 容器**，也不要给采集器 Docker socket 或额外权限。参见 [Docker bind mount 文档](https://docs.docker.com/engine/storage/bind-mounts/#recursive-mounts)。
 
-```dotenv
-# .env 中列出全部实际数据卷：
-NAS_STATUS_STORAGE_PATHS=/vol1,/vol2,/vol4
-```
+升级旧部署：使用新的完整 Compose，清空旧 `NAS_STATUS_STORAGE_PATHS`，执行 `docker compose up -d --build`，保留历史数据卷。网络旧选择不会被强制覆盖，在网页切换“自动发现物理端口”即可启用动态成员。
 
-执行 `docker compose up -d --force-recreate nas-status` 使挂载和环境变量生效，网页与小屏幕自动获取新容量，不需要重刷固件。只有一个数据卷时，也应同步删除多余挂载并缩小路径配置。
+如确需手动覆盖，可设置 `NAS_STATUS_STORAGE_PATHS=/vol1,/vol2,/vol4`，同时在 **nas-status** 增加对应只读挂载；此模式不自动扩展范围，任一配置路径不可读时同样拒绝输出不完整合计。
 
 容量采用文件系统 `statvfs` 口径，已用量为总量减 `f_bfree`，并非硬盘标称容量相加；系统分区、未分配空间以及 RAID 冗余不作为数据卷空间重复计入。界面使用十进制单位（1 TB = 10¹² 字节），与使用 TiB 的工具显示值可能不同。
 
@@ -235,7 +229,8 @@ NAS_STATUS_STORAGE_PATHS=/vol1,/vol2,/vol4
 | `NAS_STATUS_PORT` | `18199` | host 网络下服务监听端口 |
 | `NAS_STATUS_ADMIN_PASSWORD` | 自动生成 | 仅首次引导的网页管理员密码，至少 12 字符 |
 | `NAS_STATUS_TOKEN` | 无 | 必填鉴权 Token |
-| `NAS_STATUS_STORAGE_PATHS` | `/vol1,/vol2` | 逗号分隔的容器内 fnOS 数据卷根目录；必须与只读挂载一致 |
+| `NAS_STATUS_STORAGE_PATHS` | 空（自动） | 非空启用手动路径覆盖，需补充对应只读挂载 |
+| `NAS_STATUS_STORAGE_SNAPSHOT` | `/discovery/storage.json` | 隔离容量采集器的快照路径 |
 | `NAS_STATUS_HISTORY_DB` | `api.py` 同目录下的 `data/traffic.sqlite3` | 流量历史数据库；仓库 Compose 显式设为 `/data/traffic.sqlite3` |
 | `NAS_STATUS_SMART_MAX_AGE_SECONDS` | `7200` | smartd 温度日志的最大允许年龄；超时数据不参与最高硬盘温度 |
 | `PROC_ROOT` | `/host` | 容器内宿主 `/proc` 前缀 |
@@ -286,15 +281,31 @@ python3 -m unittest discover -s . -p 'test_*.py' -v
 
 ## 权限与网络
 
-Compose 只读挂载 `/proc`、`/sys`、debugfs、smartd 日志和 `/vol1`、`/vol2`，并启用只读根文件系统、移除 Linux capabilities、禁止权限提升；只将 `/data` 持久卷开放写入以保存流量历史。服务不需要 Docker socket，也不会读取容器列表。
+公开 API 容器只读挂载 `/proc`、`/sys`、debugfs、smartd 日志和容量快照，并启用只读根文件系统、移除 Linux capabilities、禁止权限提升；只将 `/data` 持久卷开放写入以保存流量历史。服务不需要 Docker socket，也不会读取容器列表。
 
 该 API 使用 HTTP Bearer Token，不提供 TLS。推荐只绑定在可信局域网；若需远程访问，请通过 WireGuard/Tailscale 等 VPN 或带 TLS 的反向代理，并设置防火墙访问控制。
 
 
 ## UPS 功率
 
-只读挂载 `/run/nut:/host/nut:ro`，复用飞牛已经运行的 NUT 驱动。仅发送 `DUMPALL` 读取缓存，不重新占用 USB、不修改 NUT/断电保护配置、不开放 UPS 控制接口。默认要求恰好一个 `usbhid-ups-*` socket；多设备时用 `NAS_STATUS_UPS_SOCKET` 指定容器内路径。
+只读挂载 `/run/nut:/host/nut:ro`，复用飞牛已经运行的 NUT 驱动。仅发送 `DUMPALL` 读取缓存，不重新占用 USB、不修改 NUT/断电保护配置、不开放 UPS 控制接口。默认自动发现 `/host/nut` 下唯一的 NUT 驱动 Unix socket（不限驱动类型）；多设备时用 `NAS_STATUS_UPS_SOCKET` 指定容器内路径。
 
 `/status` 新增 `ups: {watts, valid, source, status, alarm}`，展示投影只包含 `ups.watts`。优先使用驱动提供的 `ups.realpower` / `output.realpower`；仅已验证的 `WL W120` 直流型号允许用输出电压×电流计算瓦数，source 为 `dc_voltage_current`，其他无瓦数的型号返回不可用，避免将交流视在功率当作有功功率。原始告警保留，不把已知 W120 电池误报过滤成“保护正常”。
 
 后台线程每 2 秒采样，单次读取总时限 1 秒、最大 32KiB，HTTP 只读取快照、不等待 UPS。短暂超时保留最近有效读数，满 6 秒没有新有效读数则返回 null；socket 断开、DATASTALE、非有限数或异常数值立即返回不可用，屏幕显示 `-- W`。完整响应附带 `age_seconds`。网络 `/net` 采样路径独立。当前展示支持 0–999W，0–35W 为进度条量程，35W 不是危险阈值。
+
+### 自动发现的支持边界
+
+| 指标 | 自动来源 | 不可用的处理 |
+| --- | --- | --- |
+| CPU、内存、开机时间 | 宿主 `/proc/stat`、`meminfo`、`uptime` | 无有效计数时标记不可用 |
+| 网络速率、24 小时流量 | rtnetlink + sysfs；默认动态物理端口合计 | 无成员或计数不可读时失效；历史不足显示实际覆盖 |
+| 磁盘读写 | 动态扫描物理块设备；排除分区、md、dm 重复层 | 换盘重新建立基线，不产生虚假尖峰 |
+| 数据卷容量 | 隔离采集器扫描 fnOS 根挂载点 | 卷不可读、采集器过期时拒绝不完整合计 |
+| CPU、磁盘温度 | thermal、hwmon、已有且未过期的 smartd 日志 | 无传感器/日志显示不可用；最高温仅代表可读传感器 |
+| GPU 占用 | 自动探测 AMD busy_percent、Intel i915 渲染引擎 | 当前选首个受支持来源；NVIDIA 等未支持后端显示不可用 |
+| UPS 功率 | 扫描本机 NUT 驱动 socket，读取缓存中的有功功率 | 多 UPS 无法确定 NAS 供电关系时要求指定 socket；无有功功率不猜测 |
+
+自动发现不会安装 GPU 驱动、启用 debugfs、接管 USB UPS 或唤醒硬盘运行 SMART 扫描。硬件/系统未暴露的指标无法仅靠 Docker 自动得到；网页保留不可用状态。WL W120 已验证直流型号可使用电压×电流，其余交流 UPS 不把 VA 当作 W。多个 UPS 可通过 `NAS_STATUS_UPS_SOCKET` 指定；不擅自累加多台 UPS。
+
+2026-09-05 自动发现版本验证：29 项 Python 测试、JavaScript 语法检查、Docker 镜像构建与非 root 采集目录写入均通过。实机自动发现三卷 `/vol1`、`/vol2`、`/vol4`，总量 18,917,997,150,208 字节；两张物理网卡、三块物理盘、i915 和已有 UPS 均有有效数据，原历史与管理员配置保留。卷/网卡增减由测试模拟，未在运行中的 NAS 上实际拔盘拔网线；未宣称其他硬件组合已完成实机验收。

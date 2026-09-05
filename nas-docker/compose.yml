@@ -11,7 +11,7 @@ services:
       DEBUGFS_ROOT: /host/debug
       SMART_ROOT: /host/smartmontools
       NAS_STATUS_IFACE: ${NAS_STATUS_IFACE:-physical}
-      NAS_STATUS_STORAGE_PATHS: ${NAS_STATUS_STORAGE_PATHS:-/vol1,/vol2}
+      NAS_STATUS_STORAGE_PATHS: ${NAS_STATUS_STORAGE_PATHS:-}
       NAS_STATUS_HISTORY_DB: /data/traffic.sqlite3
       NAS_STATUS_SMART_MAX_AGE_SECONDS: ${NAS_STATUS_SMART_MAX_AGE_SECONDS:-7200}
       NAS_STATUS_TOKEN: ${NAS_STATUS_TOKEN:?Set NAS_STATUS_TOKEN in .env}
@@ -26,8 +26,7 @@ services:
       - /sys/kernel/debug:/host/debug:ro
       - /var/lib/smartmontools:/host/smartmontools:ro
       - /run/nut:/host/nut:ro
-      - /vol1:/vol1:ro
-      - /vol2:/vol2:ro
+      - discovery:/discovery:ro
       - traffic-history:/data
     security_opt:
       - no-new-privileges:true
@@ -37,5 +36,19 @@ services:
     tmpfs:
       - /tmp:size=1m
 
+  storage-discovery:
+    build: .
+    restart: unless-stopped
+    entrypoint: ["python3", "/app/storage_discovery.py"]
+    network_mode: none
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - /:/hostfs:ro,rslave
+      - discovery:/discovery
+
 volumes:
+  discovery:
   traffic-history:

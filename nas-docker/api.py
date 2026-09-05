@@ -52,7 +52,7 @@ SYS_ROOT = os.environ.get("SYS_ROOT", "/host")
 DEBUGFS_ROOT = os.environ.get("DEBUGFS_ROOT", "/host/debug")
 CONFIGURED_IFACE = os.environ.get("NAS_STATUS_IFACE", "physical").strip()
 STORAGE_PATHS = tuple(path.strip() for path in
-                      os.environ.get("NAS_STATUS_STORAGE_PATHS", "/vol1,/vol2").split(",")
+                      os.environ.get("NAS_STATUS_STORAGE_PATHS", "").split(",")
                       if path.strip())
 SECTOR_BYTES = 512
 DEFAULT_HISTORY_DB = os.path.join(os.path.dirname(__file__), "data", "traffic.sqlite3")
@@ -500,13 +500,18 @@ def disk_counters():
 
 
 def storage_status():
+    if not STORAGE_PATHS:
+        from storage_discovery import read_snapshot
+        return read_snapshot(os.environ.get("NAS_STATUS_STORAGE_SNAPSHOT", "/discovery/storage.json"))
     seen = set()
+    missing = []
     total = used = 0
     for path in STORAGE_PATHS:
         try:
             device = os.stat(path).st_dev
             stats = os.statvfs(path)
         except OSError:
+            missing.append(path)
             continue
         block_size = stats.f_frsize or stats.f_bsize
         filesystem_total = stats.f_blocks * block_size
@@ -516,13 +521,15 @@ def storage_status():
         filesystem_free = stats.f_bfree * block_size
         total += filesystem_total
         used += max(0, min(filesystem_total, filesystem_total - filesystem_free))
-    valid = bool(seen and total)
+    valid = bool(seen and total and not missing)
     return {
         "total": total if valid else None,
         "used": used if valid else None,
         "percent": round(used * 100 / total, 1) if valid else None,
         "valid": valid,
         "filesystems": len(seen),
+        "mode": "manual", "paths": list(STORAGE_PATHS),
+        "reason": "配置卷不可读：" + ", ".join(missing) if missing else "",
     }
 
 
@@ -559,12 +566,12 @@ def ups_status():
     invalid = {"watts": None, "valid": False, "source": "unavailable"}
     configured = os.environ.get("NAS_STATUS_UPS_SOCKET", "")
     try:
-        paths = [configured] if configured else [path for path in glob.glob("/host/nut/usbhid-ups-*")
+        paths = [configured] if configured else [path for path in glob.glob(os.environ.get("NUT_ROOT", "/host/nut") + "/*")
                                                 if stat.S_ISSOCK(os.stat(path).st_mode)]
     except OSError:
         return invalid
     if len(paths) != 1:
-        return invalid
+        return {**invalid, "reason": "发现多个 UPS，请指定 NAS_STATUS_UPS_SOCKET" if paths else "未发现 NUT 驱动 socket"}
     try:
         deadline = time.monotonic() + 1.0
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
@@ -597,7 +604,7 @@ def ups_status():
         if watts is None:
             # Only this verified DC model may use V*A as watts; AC needs power factor.
             if values.get("device.model") != "W120" or values.get("device.mfr") != "WL":
-                return invalid
+                return {**invalid, "reason": "UPS 未提供有功功率；不会将交流 VA 当作 W"}
             voltage, current = float(values["output.voltage"]), float(values["output.current"])
             if not (0 < voltage <= 60 and 0 <= current <= 100):
                 return invalid
@@ -793,6 +800,13 @@ class Metrics:
                   "age": round(max(0, now - sampled_at), 3),
                   "metric_age": {"temperature": round(max(0, now - temperatures_at), 1),
                                  "storage": round(max(0, now - storage_at), 1)}}
+        storage = cached['storage']
+        if storage.get('mode') == 'auto' and storage.get('sampled_at') is not None:
+            age = time.time() - storage['sampled_at']
+            result['metric_age']['storage'] = round(max(0, age), 1)
+            if not 0 <= age <= 90:
+                result['storage'] = {**storage, 'valid': False, 'total': None, 'used': None,
+                                     'percent': None, 'reason': '自动发现采集器数据过期'}
         if self.monitor is not None:
             network = self.monitor.response()
             result["net"] = {**cached["net"], "rx_speed": network["rate"][0] if network else None,

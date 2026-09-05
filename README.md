@@ -12,7 +12,7 @@
 
 当前版本：[v1.0.1 · Wi-Fi 省电优化](https://github.com/xushuojie/routermonitor-fnos/releases/tag/v1.0.1)。相比 v1.0.0，固件同时启用 Modem-sleep 和主循环 `delay(1)`，保持原有亮度、布局和刷新目标。单台 ST7789 设备的现场功率计读数由约 0.64W 降至约 0.55W（约 14%），用户确认无明显卡顿；此收益不保证适用于其他设备。USB 断开导致计划中的 3 分钟连续串口检查未完成，ILI9341 仅编译验证。
 
-已有 v1.0.0 用户更新对应屏幕的程序固件即可；本次没有服务端功能变化，无需为省电改动重新部署 Docker。
+v1.0.1 的省电改动只需更新固件。**下文的服务端自动发现功能已更新到 `main`，尚未包含在 v1.0.1 的 Docker 附件中**；需要该功能时请按快速部署拉取当前仓库并重建服务端，ESP 固件无需更新。
 
 - `st7789.bin`：ST7789 240 × 240 小屏幕，对应默认 `nodemcuv2` 配置。
 - `ili9341.bin`：ILI9341 屏幕的 240 × 240 显示区域，对应 `nodemcuv2_ili9341`，仅编译验证。
@@ -101,11 +101,11 @@ cp .env.example .env
 
 编辑 `.env`：
 
-- `NAS_STATUS_IFACE`：首次启动默认 `physical`，固定选择当时发现的物理网卡；以后通过网页选择单卡或多卡，新网卡不会自动加入
+- `NAS_STATUS_IFACE`：首次启动默认 `physical`，自动发现并跟随物理网卡增减；网页仍可切换固定单卡或多卡
 - `NAS_STATUS_PORT`：对局域网开放的端口，默认 `18199`
 - `NAS_STATUS_TOKEN`：长随机 Token，可用 `openssl rand -hex 32` 生成
 
-按 NAS 的实际存储卷调整 `compose.yml` 中 `/vol1`、`/vol2` 的只读挂载，并同步修改 `NAS_STATUS_STORAGE_PATHS`。模板使用 host 网络，确认所选端口未被占用。
+保持 `NAS_STATUS_STORAGE_PATHS` 为空，随 Compose 启动的隔离采集器会自动发现 fnOS 数据卷，无需填写 `/vol1`、`/vol2` 等路径。升级旧部署时应清除旧路径配置，并使用完整的新 Compose（包含 `storage-discovery`）。模板使用 host 网络，确认所选端口未被占用。
 
 启动并测试：
 
@@ -237,9 +237,9 @@ UPS 功率版本验收（2026-09-05）：14 项服务端测试、布局/功率�
 ## 数据与兼容性
 
 - CPU、内存、网络和运行时间来自宿主机只读挂载的 `/proc`、`/sys`
-- 首次默认选择当时发现的物理网卡，之后以网页保存的固定接口集合为准；可单选逻辑接口，已知上下层重复统计会被拒绝
+- 首次默认自动跟随物理网卡增减；旧部署保留原选择，可在网页选择“自动发现物理端口”；固定单卡、多卡模式继续保留，已知上下层重复统计会被拒绝
 - 硬盘读写速率来自全部物理块设备的 Linux 计数器；RAID 会体现底层硬盘的实际 I/O
-- 总容量与已用容量来自 `NAS_STATUS_STORAGE_PATHS` 指定并只读挂载的数据卷，按 `st_dev` 去重；模板仅包含 `/vol1`、`/vol2`，其他实际数据卷需同时补充挂载与路径配置（卷编号不一定连续，详见[容量配置](nas-docker/README.md#硬盘读写与存储容量)）
+- 容量由隔离采集器每 30 秒扫描宿主机已挂载的 fnOS 数据卷，去重后合计；任一发现的卷不可读时显示不可用，不输出偏小的总量（详见[自动发现与边界](nas-docker/README.md#硬盘读写与存储容量)）
 - CPU 温度综合读取 thermal zone 与 hwmon，识别 Intel `coretemp`、AMD `k10temp/zenpower` 及常见 ARM CPU thermal
 - 最高硬盘温度合并内核 `drivetemp`/`nvme` hwmon 与 smartd 的新鲜 ATA 日志
 - GPU 使用率支持 Intel i915 debugfs 和 AMDGPU sysfs；NVIDIA 或未暴露指标的 GPU 标记为不可用，网页与 v2 固件显示 `--`

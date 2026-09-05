@@ -56,6 +56,22 @@ class GuiTests(unittest.TestCase):
         return {'revision': self.source.settings['revision'], 'mode': 'single' if len(names) == 1 else 'sum',
                 'members': [{'id': row['id'], 'name': row['name']} for row in self.source.rows.values() if row['name'] in names], 'aliases': {}}
 
+    def test_auto_members_follow_hotplug_manual_selection_does_not(self):
+        value = self.choice('eth0')
+        value['mode'] = 'auto'
+        self.source.save(value)
+        self.assertEqual(set(self.source.selected()[1]), {'eth0', 'eth1'})
+        self.raw = [row for row in self.raw if row['name'] != 'eth1']
+        self.collect()
+        self.assertEqual(self.source.selected()[1], ['eth0'])
+        self.raw.append(interface('eth1', 2, master=3))
+        self.collect()
+        self.assertEqual(set(self.source.selected()[1]), {'eth0', 'eth1'})
+        self.source.save(self.choice('eth0'))
+        self.collect()
+        self.assertEqual(self.source.selected()[1], ['eth0'])
+        self.assertEqual(json.loads(self.source.path.read_text())['mode'], 'single')
+
     def test_topology_missing_identity_and_atomic_revision(self):
         for names in [('eth1', 'bond0'), ('eth0', 'vlan20')]:
             with self.assertRaises(SelectionError):

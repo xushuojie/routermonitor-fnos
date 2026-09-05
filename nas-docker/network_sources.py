@@ -151,7 +151,7 @@ class Sources:
             with self.lock:
                 names = api.selected_network_interfaces()[1]
                 members = [{'id': row['id'], 'name': row['name']} for row in self.rows.values() if row['name'] in names]
-                mode = 'recommended' if all(self.rows[m['id']]['physical'] for m in members) else 'single' if len(members) == 1 else 'sum'
+                mode = 'auto' if api.CONFIGURED_IFACE == 'physical' else 'single' if len(members) == 1 else 'sum'
                 self.settings = {'revision': 1, 'mode': mode, 'members': members, 'aliases': {},
                                  'legacy_scope': api.selected_network_interfaces()[0]}
                 self.settings['legacy_source'] = {'scope': self.settings['legacy_scope'], 'ids': [m['id'] for m in members]}
@@ -227,6 +227,16 @@ class Sources:
             if detail_due:
                 self.details_at = now
             self.error = ''
+            if self.settings and self.settings['mode'] == 'auto':
+                members = [{'id': row['id'], 'name': row['name']} for row in updated.values() if row['physical']]
+                if {m['id'] for m in members} != {m['id'] for m in self.settings['members']}:
+                    candidate = {**self.settings, 'members': members, 'revision': self.settings['revision'] + 1}
+                    candidate.pop('legacy_scope', None)
+                    if {m['id'] for m in members} == set(self.legacy_source().get('ids', [])):
+                        candidate['legacy_scope'] = self.legacy_source()['scope']
+                    atomic_json(self.path, candidate)
+                    self.settings = candidate
+                    self.history_selected = None
 
     def legacy_source(self):
         if self.settings.get('legacy_source'):
@@ -266,9 +276,10 @@ class Sources:
             return {row['name']: tuple(row['counters']) for row in rows}
 
     def validate(self, value):
-        if not isinstance(value, dict) or value.get('mode') not in ('recommended', 'single', 'sum'):
+        if not isinstance(value, dict) or value.get('mode') not in ('auto', 'recommended', 'single', 'sum'):
             raise SelectionError('请选择统计方式')
-        members = value.get('members')
+        members = ([{'id': row['id']} for row in self.rows.values() if row['physical']]
+                   if value['mode'] == 'auto' else value.get('members'))
         if not isinstance(members, list) or not 1 <= len(members) <= 256 or any(not isinstance(m, dict) or not isinstance(m.get('id'), str) for m in members):
             raise SelectionError('至少选择一个接口，最多 256 个')
         ids = [member['id'] for member in members]
@@ -298,7 +309,7 @@ class Sources:
         aliases = value.get('aliases', {})
         if not isinstance(aliases, dict) or len(aliases) > 256 or any(not isinstance(k, str) or not isinstance(v, str) or len(v) > 40 or any(ord(c) < 32 for c in v) for k, v in aliases.items()):
             raise SelectionError('接口别名最多 40 个字符')
-        if value['mode'] == 'recommended' and any(not row['physical'] for row in rows):
+        if value['mode'] in ('auto', 'recommended') and any(not row['physical'] for row in rows):
             raise SelectionError('推荐物理端口模式只允许选择物理接口')
         return rows
 

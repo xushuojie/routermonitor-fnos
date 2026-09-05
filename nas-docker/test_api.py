@@ -184,10 +184,8 @@ class DetectionTests(unittest.TestCase):
         with patch.object(api.time, "monotonic", side_effect=(10, 12)):
             first = metrics.snapshot()
             self.assertEqual(first["disk_io"]["read_speed"], 0)
-            self.assertEqual(first["storage"], {
-                "total": None, "used": None, "percent": None,
-                "valid": False, "filesystems": 0,
-            })
+            self.assertFalse(first["storage"]["valid"])
+            self.assertIsNone(first["storage"]["total"])
             self.physical_block("sda", 14, 30)
             self.physical_block("nvme0n1", 36, 50)
             disk = metrics.snapshot()["disk_io"]
@@ -216,13 +214,23 @@ class DetectionTests(unittest.TestCase):
 
         with patch.object(api.os, "stat", side_effect=fake_stat), \
              patch.object(api.os, "statvfs", side_effect=fake_statvfs):
-            self.assertEqual(api.storage_status(), {
-                "total": 150000,
-                "used": 110000,
-                "percent": 73.3,
-                "valid": True,
-                "filesystems": 2,
-            })
+            self.assertFalse(api.storage_status()["valid"])
+            self.assertIsNone(api.storage_status()["total"])
+            api.STORAGE_PATHS = api.STORAGE_PATHS[:-1]
+            result = api.storage_status()
+            self.assertEqual((result["total"], result["used"], result["percent"], result["filesystems"]),
+                             (150000, 110000, 73.3, 2))
+
+    def test_storage_age_tracks_collector_and_expires_between_refreshes(self):
+        metrics = api.Metrics(Mock())
+        storage = {'mode': 'auto', 'sampled_at': 1000, 'valid': True, 'total': 100, 'used': 40}
+        metrics.published = ({'storage': storage}, 10, 1, 10, 10)
+        with patch.object(api.time, 'time', return_value=1091):
+            value = metrics.read_snapshot()
+        self.assertFalse(value['storage']['valid'])
+        self.assertIsNone(value['storage']['total'])
+        self.assertEqual(value['metric_age']['storage'], 91)
+        self.assertTrue(storage['valid'])
 
     def test_single_interface_reset_changes_epoch_even_when_totals_increase(self):
         api.CONFIGURED_IFACE = "physical"

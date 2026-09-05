@@ -139,7 +139,7 @@ class WebApp:
             value[key] = {**value[key], field: value[key][field] if value[key]['valid'] and value['available'] else None}
         value['sources'] = {'network': self.sources.selected()[1], 'cpu': '/host/proc/stat',
                             'memory': '/host/proc/meminfo', 'disk_io': value['disk_io'].get('devices'),
-                            'storage_paths': list(self.sources.api.STORAGE_PATHS), 'gpu': value['gpu'].get('backend'),
+                            'storage_paths': [row['path'] for row in value['storage'].get('volumes', [])] or value['storage'].get('paths', []), 'gpu': value['gpu'].get('backend'),
                             'ups': value['ups'].get('source')}
         return value
 
