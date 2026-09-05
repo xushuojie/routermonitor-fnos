@@ -40,10 +40,10 @@ def main():
     assert save.index("persistDeviceConfig(candidate)") < save.index("deviceConfig = candidate")
 
     assert "char adminPassword[33]" in HEADER
-    assert "DIGEST_AUTH" in SOURCE
+    assert "configServer.authenticate" not in SOURCE
+    assert "requestAuthentication" not in SOURCE
     assert "equalsConstantTime(csrfSecret)" in SOURCE
     assert "SameSite=Strict" in SOURCE
-    assert "configServer.client().localIP() == WiFi.softAPIP()" in SOURCE
 
     setup_ap = function_body("static bool startSetupAp()")
     assert setup_ap.index("generateSecret(portalApSecret") < setup_ap.index("WiFi.softAP(portalApName, portalApSecret)")
@@ -55,7 +55,7 @@ def main():
     assert stop_ap.index("configDns.stop()") < stop_ap.index("WiFi.softAPdisconnect(true)")
     assert "configServer.stop" not in stop_ap
 
-    print("PASS: no mount-failure format; verified atomic save/backup recovery; Digest, CSRF and protected AP lifecycle")
+    print("PASS: no mount-failure format; verified atomic save/backup recovery; password-free page, CSRF and protected AP lifecycle")
 
 
 if __name__ == "__main__":

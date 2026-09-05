@@ -25,7 +25,6 @@ static void resetRuntime()
     restartPending = false;
     restartAt = 0;
     fileSystemMounted = true;
-    newAdminPassword = false;
     configProblem = 0;
     std::memset(portalApName, 0, sizeof(portalApName));
     std::memset(portalApSecret, 0, sizeof(portalApSecret));
@@ -114,7 +113,6 @@ static void testCorruptPrimaryMigratesLegacyBackup()
     assert(loadDeviceConfig());
     assert(std::strlen(deviceConfig.adminPassword) == 24);
     assert(std::strcmp(deviceConfig.nasHost, legacy.nasHost) == 0);
-    assert(newAdminPassword);
 
     DeviceConfig primary;
     DeviceConfig backup;
@@ -141,7 +139,7 @@ static void assertNoSaveOccurred(const DeviceConfig &expected, size_t writesBefo
     assert(configsEqual(stored, expected));
 }
 
-static void testAuthenticationAndCsrfRejectBeforeWrite()
+static void testPasswordFreeAccessAndCsrfBeforeWrite()
 {
     resetRuntime();
     const DeviceConfig current = makeConfig("nas-old");
@@ -151,18 +149,18 @@ static void testAuthenticationAndCsrfRejectBeforeWrite()
 
     const size_t writesBefore = mockFileSystem.writeOpenCalls;
     const size_t renamesBefore = mockFileSystem.renameCalls;
-    setSaveArguments(csrfSecret, "nas-attacker");
     configServer.authenticationAllowed = false;
-    saveFromRequest();
-    assert(configServer.responseCode == 401);
-    assertNoSaveOccurred(current, writesBefore, renamesBefore);
+    sendConfigPage();
+    assert(configServer.responseCode == 200);
 
-    configServer.responseCode = 0;
-    configServer.authenticationAllowed = true;
     setSaveArguments("wrong-token", "nas-attacker");
     saveFromRequest();
     assert(configServer.responseCode == 403);
     assertNoSaveOccurred(current, writesBefore, renamesBefore);
+    setSaveArguments(csrfSecret, "nas-new");
+    saveFromRequest();
+    assert(configServer.responseCode == 200);
+    assert(std::strcmp(deviceConfig.nasHost, "nas-new") == 0);
 }
 
 static void testMountFailureNeverFormatsNonBlankFlash()
@@ -189,7 +187,7 @@ int main()
     testShortWriteKeepsCurrentConfig();
     testSecondRenameFailureRecoversBackup();
     testCorruptPrimaryMigratesLegacyBackup();
-    testAuthenticationAndCsrfRejectBeforeWrite();
+    testPasswordFreeAccessAndCsrfBeforeWrite();
     testMountFailureNeverFormatsNonBlankFlash();
-    std::cout << "PASS: executable ConfigPortal failure, recovery, authentication and CSRF paths" << std::endl;
+    std::cout << "PASS: executable ConfigPortal failure, recovery, password-free access and CSRF paths" << std::endl;
 }

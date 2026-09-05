@@ -16,7 +16,6 @@ static bool portalApMode = false;
 static bool restartPending = false;
 static unsigned long restartAt = 0;
 static bool fileSystemMounted = false;
-static bool newAdminPassword = false;
 static uint8_t configProblem = 0; // 0: ready, 1: mount failed, 2: config invalid or write failed.
 static char portalApName[25] = {0};
 static char portalApSecret[17] = {0};
@@ -25,7 +24,6 @@ static char csrfSecret[33] = {0};
 static const char *const CONFIG_PATH = "/config.json";
 static const char *const CONFIG_TEMP_PATH = "/config.tmp";
 static const char *const CONFIG_BACKUP_PATH = "/config.bak";
-static const char *const ADMIN_USER = "admin";
 
 static const char CONFIG_PAGE[] PROGMEM = R"HTML(
 <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -277,14 +275,6 @@ static bool persistDeviceConfig(const DeviceConfig &config)
     return readConfigFile(CONFIG_PATH, verified, true) && configsEqual(config, verified);
 }
 
-static void announceNewAdminPassword()
-{
-    newAdminPassword = true;
-    Serial.println(F("New configuration login: admin"));
-    Serial.print(F("New configuration password: "));
-    Serial.println(deviceConfig.adminPassword);
-}
-
 bool loadDeviceConfig()
 {
     if (!mountFileSystem())
@@ -311,7 +301,6 @@ bool loadDeviceConfig()
             }
             deviceConfig = loaded;
             configProblem = 0;
-            announceNewAdminPassword();
             return true;
         }
         fromBackup = true;
@@ -323,10 +312,9 @@ bool loadDeviceConfig()
         if (persistDeviceConfig(loaded))
         {
             deviceConfig = loaded;
-            announceNewAdminPassword();
             return true;
         }
-        deviceConfig = loaded; // Monitoring still works; LAN configuration remains closed.
+        deviceConfig = loaded; // Continue monitoring with the recovered configuration.
         configProblem = 2;
         return true;
     }
@@ -351,21 +339,6 @@ bool hasNasConfig()
 
 static void sendConfigPage()
 {
-    const bool requestFromAp = portalApMode && configServer.client().localIP() == WiFi.softAPIP();
-    if (!requestFromAp)
-    {
-        if (!deviceConfig.adminPassword[0])
-        {
-            configServer.send(503, "text/plain; charset=utf-8", "Configuration login is unavailable; use local setup recovery.");
-            return;
-        }
-        if (!configServer.authenticate(ADMIN_USER, deviceConfig.adminPassword))
-        {
-            configServer.requestAuthentication(DIGEST_AUTH, "Router Monitor");
-            return;
-        }
-    }
-
     String cookie = F("router_setup=");
     cookie += csrfSecret;
     cookie += configProblem == 1 ? F(".mount") : (configProblem == 2 ? F(".config") : F(".ok"));
@@ -378,17 +351,6 @@ static void sendConfigPage()
 
 static bool authorizeSave()
 {
-    const bool requestFromAp = portalApMode && configServer.client().localIP() == WiFi.softAPIP();
-    if (!requestFromAp && !deviceConfig.adminPassword[0])
-    {
-        configServer.send(503, "text/plain; charset=utf-8", "Configuration login is unavailable; use local setup recovery.");
-        return false;
-    }
-    if (!requestFromAp && !configServer.authenticate(ADMIN_USER, deviceConfig.adminPassword))
-    {
-        configServer.requestAuthentication(DIGEST_AUTH, "Router Monitor");
-        return false;
-    }
     const String csrf = configServer.arg("csrf");
     if (csrf.length() != 32 || !csrf.equalsConstantTime(csrfSecret))
     {
@@ -498,8 +460,6 @@ static void saveFromRequest()
     }
     deviceConfig = candidate;
     configProblem = 0;
-    if (generatedAdmin)
-        announceNewAdminPassword();
 
     configServer.send(200, "text/html; charset=utf-8",
                       "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><h2>Saved</h2><p>The display is restarting.</p>");
@@ -585,9 +545,4 @@ const char *configPortalApSsid()
 const char *configPortalApPassword()
 {
     return portalApMode ? portalApSecret : "";
-}
-
-const char *configPortalAdminPasswordForSetup()
-{
-    return newAdminPassword ? deviceConfig.adminPassword : "";
 }
