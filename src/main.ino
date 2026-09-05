@@ -645,7 +645,7 @@ static void carousel_task_cb(lv_task_t *task)
 
 void styleMetricBar(lv_obj_t *bar, lv_color_t indicatorColor, lv_color_t trackColor)
 {
-    lv_obj_set_size(bar, 53, 3);
+    lv_obj_set_size(bar, 53, 5);
     lv_obj_set_style_local_bg_color(bar, LV_BAR_PART_BG, LV_STATE_DEFAULT, trackColor);
     lv_obj_set_style_local_bg_color(bar, LV_BAR_PART_INDIC, LV_STATE_DEFAULT, indicatorColor);
     lv_obj_set_style_local_border_width(bar, LV_BAR_PART_BG, LV_STATE_DEFAULT, 0);
@@ -677,7 +677,7 @@ static void createMetric(const char *titleText, lv_coord_t left, lv_color_t colo
 
     bar = lv_bar_create(monitor_page, NULL);
     styleMetricBar(bar, color, lv_color_hex(0x304451));
-    lv_obj_set_pos(bar, left, 232);
+    lv_obj_set_pos(bar, left, 230);
 }
 
 static void createDivider(lv_coord_t x, lv_coord_t y, lv_coord_t width, lv_color_t color)
