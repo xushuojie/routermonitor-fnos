@@ -424,7 +424,11 @@ static void renderCarousel()
     const char *firstUnit = "";
     const char *secondUnit = "";
     static uint8_t renderedPage = 255;
-    carouselLayoutChanged = renderedPage != carouselPage;
+    static unsigned long renderedUptimeDays = UINT32_MAX;
+    const unsigned long uptimeDays = nasOnline ? nas_uptime_seconds / 86400UL : UINT32_MAX;
+    const bool longUptime = nasOnline && uptimeDays > 999;
+    carouselLayoutChanged = renderedPage != carouselPage ||
+                            (carouselPage == 1 && renderedUptimeDays != uptimeDays);
     if (carouselLayoutChanged)
     {
         hideCarouselContent();
@@ -432,6 +436,7 @@ static void renderCarousel()
             lv_obj_set_style_local_bg_color(carousel_dots[index], LV_OBJ_PART_MAIN, LV_STATE_DEFAULT,
                                             index == carouselPage ? lv_color_hex(0xdce4ea) : lv_color_hex(0x304451));
         renderedPage = carouselPage;
+        renderedUptimeDays = uptimeDays;
     }
 
     if (carouselPage == 0)
@@ -463,25 +468,35 @@ static void renderCarousel()
     }
     else if (carouselPage == 1)
     {
-        unsigned long days = 0;
-        unsigned long hours = 0;
         if (nasOnline)
         {
-            days = nas_uptime_seconds / 86400UL;
-            hours = (nas_uptime_seconds / 3600UL) % 24UL;
-            snprintf(first, sizeof(first), "%lu", days);
-            snprintf(second, sizeof(second), "%lu", hours);
+            snprintf(first, sizeof(first), "%lu", nas_uptime_seconds / 86400UL);
+            snprintf(second, sizeof(second), "%02lu", (nas_uptime_seconds / 3600UL) % 24UL);
+            snprintf(third, sizeof(third), "%02lu", (nas_uptime_seconds / 60UL) % 60UL);
         }
         showCarouselLabel(carousel_title[0], "UPTIME", &lv_font_montserrat_12, muted,
                           0, -1, 230, 15, LV_LABEL_ALIGN_CENTER);
-        showCarouselLabel(carousel_value[0], first, &monitor_value_22, primary,
-                          10, 12, 75, 24, LV_LABEL_ALIGN_RIGHT);
-        showCarouselLabel(carousel_unit[0], "D", &lv_font_montserrat_12, muted,
-                          88, 20, 10, 15, LV_LABEL_ALIGN_LEFT);
-        showCarouselLabel(carousel_value[1], second, &monitor_value_22, primary,
-                          145, 12, 48, 24, LV_LABEL_ALIGN_RIGHT);
-        showCarouselLabel(carousel_unit[1], "H", &lv_font_montserrat_12, muted,
-                          195, 20, 10, 15, LV_LABEL_ALIGN_LEFT);
+        const lv_color_t valueColor = lv_color_hex(0xdce4ea);
+        lv_point_t daySize;
+        _lv_txt_get_size(&daySize, first, &monitor_value_22, 0, 0, LV_COORD_MAX, LV_TXT_FLAG_NONE);
+        const lv_coord_t left = (230 - daySize.x - (longUptime ? 58 : 109)) / 2;
+        const lv_coord_t hourLeft = left + daySize.x + 19;
+        showCarouselLabel(carousel_value[0], first, &monitor_value_22, valueColor,
+                          left, 12, daySize.x, 24, LV_LABEL_ALIGN_RIGHT);
+        showCarouselLabel(carousel_unit[0], "d", &lv_font_montserrat_12, muted,
+                          left + daySize.x + 2, 20, 9, 15, LV_LABEL_ALIGN_LEFT);
+        showCarouselLabel(carousel_value[1], second, &monitor_value_22, valueColor,
+                          hourLeft, 12, 28, 24, LV_LABEL_ALIGN_RIGHT);
+        showCarouselLabel(carousel_unit[1], "h", &lv_font_montserrat_12, muted,
+                          hourLeft + 30, 20, 9, 15, LV_LABEL_ALIGN_LEFT);
+        if (!longUptime)
+        {
+            showCarouselLabel(carousel_value[2], third, &monitor_value_22, valueColor,
+                              hourLeft + 47, 12, 28, 24, LV_LABEL_ALIGN_RIGHT);
+            // Reuse a spare title label for the third unit; no extra LVGL object.
+            showCarouselLabel(carousel_title[1], "m", &lv_font_montserrat_12, muted,
+                              hourLeft + 77, 20, 13, 15, LV_LABEL_ALIGN_LEFT);
+        }
     }
     else if (carouselPage == 2)
     {

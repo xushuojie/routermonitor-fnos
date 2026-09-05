@@ -78,7 +78,7 @@ int main(int argc, char **argv) {
     nasStatus.trafficHistoryValid=true; nasStatus.trafficCoverageSeconds=86400;
     nasStatus.cpuTemperature=46; nasStatus.diskTemperature=39;
     nasStatus.diskReadBytesPerSecond=84000000; nasStatus.diskWriteBytesPerSecond=12000000;
-    nasStatus.diskIoValid=true; nas_uptime_seconds=7*86400+13*3600;
+    nasStatus.diskIoValid=true; nas_uptime_seconds=7*86400+13*3600+24*60;
     nasStatus.storageTotalBytes=24000000000000.; nasStatus.storageUsedBytes=15600000000000.;
     nasStatus.storagePercent=65; nasStatus.storageValid=true;
     updateNetworkInfoLabel(); updateDiskIo(true);
@@ -98,6 +98,18 @@ int main(int argc, char **argv) {
             if(lv_obj_get_style_text_color(carousel_value[j],LV_LABEL_PART_MAIN).full != lv_color_hex(colors[i]).full) return 4;
     }
     nasOnline=true; nasStatus.cpuTemperature=46; nasStatus.diskTemperature=39;
+    carouselPage=1;
+    const unsigned long uptimes[]={29100UL,86399UL,86400UL,86400000UL,0UL};
+    const char *expected[][3]={{"0","08","05"},{"0","23","59"},{"1","00","00"},{"1000","00","00"},{"--","--","--"}};
+    for(int i=0;i<5;i++) {
+        nasOnline=i!=4; nas_uptime_seconds=uptimes[i]; renderCarousel();
+        for(int j=0;j<(i==3?2:3);j++) {
+            if(strcmp(lv_label_get_text(carousel_value[j]),expected[i][j])) return 5;
+            if(lv_obj_get_hidden(carousel_value[j])) return 6;
+        }
+        if(lv_obj_get_hidden(carousel_title[1]) != (i==3)) return 7;
+    }
+    nasOnline=true; nas_uptime_seconds=7*86400+13*3600+24*60;
     for (int page=0;page<5;page++) {
         carouselPage=page % 4;
         if(page==4) {
