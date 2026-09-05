@@ -1,8 +1,9 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="io.github.routermonitor.fnos" android:versionCode="4" android:versionName="1.0.3">
-    <uses-sdk android:minSdkVersion="18" android:targetSdkVersion="18" />
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="io.github.routermonitor.fnos" android:versionCode="5" android:versionName="1.1.0">
+    <uses-sdk android:minSdkVersion="18" android:targetSdkVersion="37" />
     <uses-permission android:name="android.permission.INTERNET" />
-    <application android:label="NAS Monitor" android:icon="@android:drawable/ic_menu_view" android:allowBackup="false" android:theme="@android:style/Theme.Holo.NoActionBar.Fullscreen" android:hardwareAccelerated="true">
-        <activity android:name=".MainActivity" android:screenOrientation="landscape" android:exported="true">
+    <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
+    <application android:label="NAS Monitor" android:icon="@android:drawable/ic_menu_view" android:allowBackup="false" android:usesCleartextTraffic="true" android:theme="@android:style/Theme.Holo.NoActionBar.Fullscreen" android:hardwareAccelerated="true">
+        <activity android:name=".MainActivity" android:resizeableActivity="true" android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|fontScale|keyboardHidden" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

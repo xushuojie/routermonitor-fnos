@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parent
 SDK = Path(os.environ.get('ANDROID_HOME', '/opt/homebrew/share/android-commandlinetools'))
 JAVA = Path(os.environ.get('JAVA_HOME', '/opt/homebrew/opt/openjdk')) / 'bin'
 BT = SDK / 'build-tools' / os.environ.get('ANDROID_BUILD_TOOLS', '35.0.1')
-JAR = SDK / 'platforms/android-18/android.jar'
+JAR = SDK / 'platforms' / os.environ.get('ANDROID_PLATFORM', 'android-37.0') / 'android.jar'
 OUT = ROOT / 'build'
 
 def run(*args, **kwargs):
@@ -18,7 +18,7 @@ def run(*args, **kwargs):
 
 def main():
     if not JAR.exists():
-        raise SystemExit('Install platforms;android-18 and build-tools;35.0.1 with sdkmanager first.')
+        raise SystemExit('Install platforms;android-37.0 and build-tools;35.0.1 with sdkmanager first.')
     OUT.mkdir(exist_ok=True)
     for name in ('classes', 'dex', 'test'):
         target = OUT / name
@@ -26,7 +26,7 @@ def main():
         target.mkdir()
     sources = sorted((ROOT / 'src').rglob('*.java'))
     run(JAVA/'javac', '--release', '8', '-encoding', 'UTF-8', '-classpath', JAR, '-d', OUT/'classes', *sources)
-    run(JAVA/'javac', '--release', '8', '-encoding', 'UTF-8', '-d', OUT/'test', ROOT/'src/io/github/routermonitor/fnos/DisplayMath.java', *sorted((ROOT/'test').rglob('*.java')))
+    run(JAVA/'javac', '--release', '8', '-encoding', 'UTF-8', '-d', OUT/'test', ROOT/'src/io/github/routermonitor/fnos/DisplayMath.java', ROOT/'src/io/github/routermonitor/fnos/DisplayLayout.java', *sorted((ROOT/'test').rglob('*.java')))
     run(JAVA/'java', '-cp', OUT/'test', 'io.github.routermonitor.fnos.DisplayMathTest')
     env = dict(os.environ, JAVA_HOME=str(JAVA.parent))
     run(BT/'d8', '--min-api', '18', '--lib', JAR, '--output', OUT/'dex', *sorted((OUT/'classes').rglob('*.class')), env=env)

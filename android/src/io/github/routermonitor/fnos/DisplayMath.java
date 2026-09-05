@@ -17,6 +17,9 @@ final class DisplayMath {
         else if (value.endsWith(".0")) value = value.substring(0, value.length() - 2);
         return new String[]{value, units[n] + (speed ? "/s" : "")};
     }
+    static boolean nightActive(int minute,int start,int end) {
+        return start==end || (start<end ? minute>=start&&minute<end : minute>=start||minute<end);
+    }
     static double ceiling(double max) {
         if (!valid(max) || max < 1000) return 1000;
         double step = Math.pow(10, Math.floor(Math.log10(max)) - 1);

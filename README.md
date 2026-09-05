@@ -4,18 +4,19 @@
 
 **飞牛 / Linux NAS 网页控制台 + ESP8266 桌面监控屏**
 
-也支持 [Android 4.3 起的旧手机原生显示终端](android/README.md)：960×540 横屏、大字时钟与网速、四页轮播和 NAS 状态底栏，读取同一 Docker 数据源。Android APK 需按模块说明构建，尚未包含在 v1.0.2 的 Release 附件中。
+也支持 [Android 手机和平板原生显示终端](android/README.md)：目标兼容 Android 4.3–17，自适应横竖屏、大字时钟与网速、CPU 温度、可设置起止时间和亮度的夜间模式，读取同一 Docker 数据源。可直接下载 Release 中的 APK；实测设备范围见模块说明。
 
 [快速部署](#1-部署-nas-服务) · [网页控制台](#打开-nas-网页控制台) · [屏幕与烧录](#2-编译和烧录固件) · [服务端完整说明](nas-docker/README.md)
 
 ## 下载发行版
 
-[GitHub Releases](https://github.com/xushuojie/routermonitor-fnos/releases/latest) 提供两种屏幕的预编译固件、Docker 服务端部署包及 `SHA256SUMS.txt` 校验文件。
+[GitHub Releases](https://github.com/xushuojie/routermonitor-fnos/releases/latest) 提供 Android APK、两种屏幕的预编译固件、Docker 服务端部署包及 `SHA256SUMS.txt` 校验文件。
 
-当前版本：[v1.0.2 · 数据源自动发现与显示优化](https://github.com/xushuojie/routermonitor-fnos/releases/tag/v1.0.2)。服务端自动发现物理网口和存储卷，使用隔离采集容器统计容量；固件底部 POWER、CPU、GPU、MEM 进度条由 3px 加粗至 5px，保留 v1.0.1 的 Wi-Fi 省电优化。
+当前版本：[v1.1.0 · Android 多屏适配与夜间设置](https://github.com/xushuojie/routermonitor-fnos/releases/tag/v1.1.0)。Android APK 新增多尺寸布局和定时夜间亮度；ESP8266 与 Docker 没有变更，发行附件沿用 v1.0.2 的已发布文件及原文件名，无需为本次 Android 更新重新刷屏或部署 NAS。
 
-升级服务端请使用本版完整 Docker 部署包（包含新增的 `storage-discovery` 服务），保留已有数据目录和认证配置，按[服务端说明](nas-docker/README.md)迁移；只替换 `api.py` 无法启用容量自动发现。更新对应屏幕固件即可获得加粗进度条。ILI9341 仅编译验证。
+从早期版本升级服务端时，请使用完整 Docker 部署包（包含新增的 `storage-discovery` 服务），保留已有数据目录和认证配置，按[服务端说明](nas-docker/README.md)迁移；只替换 `api.py` 无法启用容量自动发现。v1.0.2 对应屏幕固件包含加粗进度条。ILI9341 仅编译验证。
 
+- `android.apk`：Android 原生显示端，安装后填写 NAS 地址和只读 Token，覆盖安装保留设置。
 - `st7789.bin`：ST7789 240 × 240 小屏幕，对应默认 `nodemcuv2` 配置。
 - `ili9341.bin`：ILI9341 屏幕的 240 × 240 显示区域，对应 `nodemcuv2_ili9341`，仅编译验证。
 - `nas-docker.zip`：解压后进入 `nas-docker`，按部署说明配置 `.env` 并执行 `docker compose up -d --build`；这是部署源码包，不是预构建 Docker 镜像。
@@ -60,6 +61,7 @@
 .
 ├─ include/TFT_eSPI_Setup.h  # 屏幕驱动与引脚
 ├─ src/                      # ESP8266 固件和字体资源
+├─ android/                  # Android 手机/平板原生显示端
 ├─ nas-docker/               # NAS API、网页控制台、Dockerfile、Compose
 ├─ platformio.ini            # PlatformIO 构建配置
 └─ images/                   # 项目图片

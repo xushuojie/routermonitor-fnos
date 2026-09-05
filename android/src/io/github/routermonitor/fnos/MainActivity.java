@@ -2,6 +2,9 @@ package io.github.routermonitor.fnos;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.TimePickerDialog;
+import android.os.Build;
+import android.widget.Button;
 import android.content.DialogInterface;
 import android.content.SharedPreferences;
 import android.os.Bundle;
@@ -45,11 +48,13 @@ public final class MainActivity extends Activity {
         prefs = getSharedPreferences("display", MODE_PRIVATE);
         display = new MonitorView(this);
         setContentView(display);
+        PlatformUi.install(display);
         if (prefs.getString("token", "").length() == 0) ui.post(new Runnable() { public void run() { settings(); }});
     }
     @Override public void onResume() { super.onResume(); resumed = true; start(); ui.post(tick); }
     @Override public void onPause() { resumed = false; ui.removeCallbacks(tick); stop(); super.onPause(); }
-    @Override public void onBackPressed() { settings(); }
+    @Override public void onBackPressed() { super.onBackPressed(); }
+    @Override public void onConfigurationChanged(android.content.res.Configuration config){super.onConfigurationChanged(config);display.relayout();}
     @Override public boolean onCreateOptionsMenu(android.view.Menu menu) { settings(); return false; }
 
     final Runnable tick = new Runnable() { public void run() {
@@ -66,8 +71,9 @@ public final class MainActivity extends Activity {
     void applyBrightness() {
         float value = prefs.getInt("brightness", 30) / 100f;
         Calendar c = Calendar.getInstance(TimeZone.getTimeZone("Asia/Shanghai"));
-        int hour = c.get(Calendar.HOUR_OF_DAY);
-        if (prefs.getBoolean("night", true) && (hour >= 23 || hour < 7)) value = Math.min(value, .1f);
+        if(display.serverClock>0)c.setTimeInMillis(display.serverClock+SystemClock.elapsedRealtime()-display.clockAt);
+        int minute=c.get(Calendar.HOUR_OF_DAY)*60+c.get(Calendar.MINUTE);
+        if(prefs.getBoolean("night",true)&&DisplayMath.nightActive(minute,prefs.getInt("night_start",1380),prefs.getInt("night_end",420)))value=prefs.getInt("night_brightness",10)/100f;
         WindowManager.LayoutParams p = getWindow().getAttributes();
         if (Math.abs(p.screenBrightness - value) > .001f) { p.screenBrightness = value; getWindow().setAttributes(p); }
     }
@@ -79,12 +85,33 @@ public final class MainActivity extends Activity {
     }
     void start() {
         if (!resumed || configuring || workers != null || prefs.getString("token", "").length() == 0) return;
+        if(needsLocalPermission()){
+            display.netError=display.statusError="需要局域网权限";display.invalidate();
+            if(!askedLocal){askedLocal=true;requestPermissions(new String[]{"android.permission.ACCESS_LOCAL_NETWORK"},37);}return;
+        }
         workers = new ScheduledThreadPoolExecutor(2);
         int current = ++generation;
         String base = prefs.getString("server", ""), token = prefs.getString("token", "");
         try { display.serverHost = new URL(base).getHost(); } catch (Exception e) { display.serverHost = "—"; }
         workers.execute(new Poll(true, current, base, token, prefs.getInt("interval", 500), workers));
         workers.execute(new Poll(false, current, base, token, 1000, workers));
+    }
+
+    boolean askedLocal;
+    boolean needsLocalPermission(){
+        if(Build.VERSION.SDK_INT<37||checkSelfPermission("android.permission.ACCESS_LOCAL_NETWORK")==android.content.pm.PackageManager.PERMISSION_GRANTED)return false;
+        try{
+            String host=new URL(prefs.getString("server","")).getHost().toLowerCase(java.util.Locale.US);
+            if(host.matches("[0-9.]+")){
+                String[] parts=host.split("\\.");int a=Integer.parseInt(parts[0]),b=parts.length>1?Integer.parseInt(parts[1]):0;
+                return a==10||a==127||a==192&&b==168||a==172&&b>=16&&b<=31||a==169&&b==254;
+            }
+            return true; // Hostnames may resolve inside the LAN; ask once before resolving them.
+        }catch(Exception e){return false;}
+    }
+    @Override public void onRequestPermissionsResult(int request,String[] permissions,int[] results){
+        super.onRequestPermissionsResult(request,permissions,results);
+        if(request==37){if(!needsLocalPermission())start();else {display.netError=display.statusError="需要局域网权限 · 设置";display.invalidate();}}
     }
 
     final class Poll implements Runnable {
@@ -182,7 +209,21 @@ public final class MainActivity extends Activity {
             public void onProgressChanged(SeekBar b,int progress,boolean user){light.setText("亮度 " + (progress+10) + "%");}
             public void onStartTrackingTouch(SeekBar b){} public void onStopTrackingTouch(SeekBar b){}
         }); form.addView(brightness);
-        final CheckBox night=new CheckBox(this); night.setText("23:00–07:00 自动调暗至 10%"); night.setChecked(prefs.getBoolean("night", true)); form.addView(night);
+        final CheckBox night=new CheckBox(this); night.setText("启用定时夜间模式（上海时区）"); night.setChecked(prefs.getBoolean("night", true)); form.addView(night);
+        final int[] nightTimes={prefs.getInt("night_start",1380),prefs.getInt("night_end",420)};
+        timeButton(form,"开启时间",nightTimes,0);timeButton(form,"关闭时间",nightTimes,1);
+        final TextView nightCaption=new TextView(this);form.addView(nightCaption);
+        final SeekBar nightBrightness=new SeekBar(this);nightBrightness.setMax(99);nightBrightness.setProgress(prefs.getInt("night_brightness",10)-1);
+        nightCaption.setText("夜间亮度 "+(nightBrightness.getProgress()+1)+"%");
+        nightBrightness.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
+            public void onProgressChanged(SeekBar b,int progress,boolean user){nightCaption.setText("夜间亮度 "+(progress+1)+"%");}
+            public void onStartTrackingTouch(SeekBar b){} public void onStopTrackingTouch(SeekBar b){}
+        });form.addView(nightBrightness);
+        TextView note=new TextView(this);note.setText("支持跨午夜；开启和关闭时间相同表示全天夜间模式。结束后恢复日间亮度。");form.addView(note);
+        final CheckBox expand=new CheckBox(this);expand.setText("大屏空间充足时展开四页辅助信息");expand.setChecked(prefs.getBoolean("expand",true));form.addView(expand);
+        if(Build.VERSION.SDK_INT>=37){Button permission=new Button(this);permission.setText("局域网访问权限");form.addView(permission);permission.setOnClickListener(new android.view.View.OnClickListener(){public void onClick(android.view.View v){
+            android.content.Intent intent=new android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,android.net.Uri.parse("package:"+getPackageName()));startActivity(intent);
+        }});}
         ScrollView scroll=new ScrollView(this); scroll.addView(form);
         final AlertDialog dialog=new AlertDialog.Builder(this).setTitle("NAS 显示终端设置").setView(scroll).setPositiveButton("保存并连接", null).setNegativeButton("取消", null).create();
         dialog.setOnDismissListener(new DialogInterface.OnDismissListener(){public void onDismiss(DialogInterface d){configuring=false;start();}});
@@ -195,8 +236,17 @@ public final class MainActivity extends Activity {
             } catch (Exception e) {server.setError("请输入有效的 HTTP / HTTPS 服务根地址");return;}
             if (secret.length()<1 || secret.length()>512 || !secret.matches("[!-~]+")) {token.setError("请输入有效的只读 Token");return;}
             while(address.endsWith("/"))address=address.substring(0,address.length()-1);
-            prefs.edit().putString("server",address).putString("token",secret).putInt("interval",speed.getSelectedItemPosition()==1?200:500).putInt("brightness",brightness.getProgress()+10).putBoolean("night",night.isChecked()).commit();
-            display.reset();dialog.dismiss();
+            prefs.edit().putString("server",address).putString("token",secret).putInt("interval",speed.getSelectedItemPosition()==1?200:500).putInt("brightness",brightness.getProgress()+10).putBoolean("night",night.isChecked()).putInt("night_start",nightTimes[0]).putInt("night_end",nightTimes[1]).putInt("night_brightness",nightBrightness.getProgress()+1).putBoolean("expand",expand.isChecked()).commit();
+            display.reset();display.relayout();applyBrightness();dialog.dismiss();
+        }});
+    }
+    void timeButton(LinearLayout form,final String title,final int[] times,final int index){
+        final Button button=new Button(this);form.addView(button);
+        button.setText(String.format(java.util.Locale.US,"%s  %02d:%02d",title,times[index]/60,times[index]%60));
+        button.setOnClickListener(new android.view.View.OnClickListener(){public void onClick(android.view.View v){
+            new TimePickerDialog(MainActivity.this,new TimePickerDialog.OnTimeSetListener(){public void onTimeSet(android.widget.TimePicker picker,int hour,int minute){
+                times[index]=hour*60+minute;button.setText(String.format(java.util.Locale.US,"%s  %02d:%02d",title,hour,minute));
+            }},times[index]/60,times[index]%60,true).show();
         }});
     }
     EditText field(LinearLayout form,String label,String value,boolean secret) {
