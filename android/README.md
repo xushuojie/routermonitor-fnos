@@ -1,5 +1,7 @@
 # Android NAS 显示终端
 
+[项目首页图文教程](../README.md#android-app) · [下载最新版](https://github.com/xushuojie/routermonitor-fnos/releases/latest) · [网页连接与 Token 教程](../README.md#web-console)
+
 原生 Java + Canvas，一个 APK 面向 Android 4.3（API 18）至 Android 17（API 37）的手机和平板。无 WebView、Google Play 服务或原生 `.so` 依赖。设置页使用 AndroidX 和 Google Material Components。最低系统版本不代表所有厂商机型均已验收；实测范围见下文。
 
 ## 下载与连接

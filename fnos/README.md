@@ -2,6 +2,8 @@
 
 [安装包](../downloads/routermonitor-fnos-1.3.0-5-amd64.fpk) · [使用说明书](../docs/使用说明书.md)
 
+[飞牛安装图解](../README.md#fnos-install) · [新版网页完整图文教程](../README.md#web-console)
+
 本目录为最新 FPK 对应源码；仓库根目录的 `nas-docker/` 是此前的独立 Docker 部署版本。
 
 | 路径 | 内容 |

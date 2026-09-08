@@ -1,272 +1,448 @@
-# Router Monitor for FNOS NAS
+# NAS Monitor · 飞牛 NAS 监控与 Android 显示终端
 
-![ESP8266 NAS 监控小电视实拍](images/device-photo.png)
+**在网页管理 NAS，在闲置手机、平板或 ESP8266 小屏幕上随时查看状态。**
 
-**飞牛 / Linux NAS 网页控制台 + ESP8266 桌面监控屏**
+NAS Monitor 包含飞牛 FPK 服务端、网页控制台、Android 原生 App 和 ESP8266 固件。服务端统一采集网络、CPU、内存、磁盘、温度、存储空间与可用的 GPU / UPS 数据，各显示端读取同一数据源。只用浏览器也能使用，不必购买小屏幕。
 
-也支持 [Android 手机和平板原生显示终端](android/README.md)：目标兼容 Android 4.3–17，自适应横竖屏、大字时钟与网速、CPU 温度、可设置起止时间和亮度的夜间模式，读取同一 Docker 数据源。可直接下载 Release 中的 APK；实测设备范围见模块说明。
+![新版网页数据展示](images/guide/web-overview.png)
 
-[快速部署](#1-部署-nas-服务) · [网页控制台](#打开-nas-网页控制台) · [屏幕与烧录](#2-编译和烧录固件) · [服务端完整说明](nas-docker/README.md)
+*飞牛 1.3.0-5 真实网页前端，使用示例数据在本地截图；读数不代表实机性能。*
 
-## 最新下载与说明
+**[下载最新版](https://github.com/xushuojie/routermonitor-fnos/releases/latest)** · [Android 教程](#android-app) · [飞牛安装](#fnos-install) · [网页教程](#web-console) · [常见问题](#faq) · [使用说明书](docs/使用说明书.md)
 
-本次同步：飞牛 **1.3.0-5**，Android **1.1.5-adaptive-test**。
+## 目录
 
-| 文件 | 下载 | 说明 |
+- [下载、版本与适用设备](#downloads)
+- [第一次使用：从安装到连接](#quick-start)
+- [Android App：功能、安装、设置与升级](#android-app)
+- [飞牛 FPK：安装、升级与数据保留](#fnos-install)
+- [网页控制台：指标、Token、硬件、网络与备份](#web-console)
+- [ESP8266 桌面小屏幕](#esp8266)
+- [常见问题与排查](#faq)
+- [源码、构建与验证范围](#development)
+
+<a id="downloads"></a>
+## 下载、版本与适用设备
+
+当前发布：[v1.3.0-5 Release](https://github.com/xushuojie/routermonitor-fnos/releases/tag/v1.3.0-5)。**Release 标签对应飞牛版本，Android APK 自身版本为 1.1.5-adaptive-test。**
+
+| 组件 | 版本 / 要求 | 下载或入口 |
 | --- | --- | --- |
-| 飞牛 FPK | [routermonitor-fnos-1.3.0-5-amd64.fpk](downloads/routermonitor-fnos-1.3.0-5-amd64.fpk) | x86-64 / amd64，含离线 Docker 镜像 |
-| Android APK | [routermonitor-android-1.1.5-adaptive-test.apk](downloads/routermonitor-android-1.1.5-adaptive-test.apk) | Android 4.3 起，独立测试包名及测试签名 |
-| 校验文件 | [SHA256SUMS.txt](downloads/SHA256SUMS.txt) | 两个安装包的 SHA-256 |
+| 飞牛 FPK | **1.3.0-5**；x86-64 / amd64；需要 Docker，含离线镜像 | [下载 FPK](https://github.com/xushuojie/routermonitor-fnos/releases/download/v1.3.0-5/routermonitor-fnos-1.3.0-5-amd64.fpk) |
+| Android App | **1.1.5-adaptive-test**；最低 Android 4.3 / API 18 | [下载 APK](https://github.com/xushuojie/routermonitor-fnos/releases/download/v1.3.0-5/routermonitor-android-1.1.5-adaptive-test.apk) |
+| 网页控制台 | 随 FPK 提供，无需另装网页程序 | 安装后访问 `http://NAS局域网IP:18199` |
+| 安装包校验 | SHA-256 | [下载校验文件](https://github.com/xushuojie/routermonitor-fnos/releases/download/v1.3.0-5/SHA256SUMS.txt) |
+| ESP8266 固件 | 本次未更新；ST7789 / ILI9341 | [历史发行版](https://github.com/xushuojie/routermonitor-fnos/releases) |
+| 完整源码 | Android、飞牛、网页与 ESP8266 | [下载 main 分支 ZIP](https://github.com/xushuojie/routermonitor-fnos/archive/refs/heads/main.zip) |
 
-**[完整安装与使用说明书](docs/使用说明书.md)** · [飞牛源码与打包](fnos/README.md) · [Android 功能与构建](android/README.md)
+也可从 [downloads 目录](downloads/) 获取安装包，在文件页面点击 **Download raw file**，不要保存成 GitHub 网页。
 
-下载文件时打开链接后点击 **Download raw file**。源码可从仓库 **Code → Download ZIP** 获取，或运行 `git clone https://github.com/xushuojie/routermonitor-fnos.git`。
-
-Android 测试版包名为 `io.github.routermonitor.fnos.layouttest`，可与旧正式版并存；首次安装需重新填写 NAS 地址与 Token。同一签名的 1.1.1–1.1.4 布局测试版可覆盖升级。它不覆盖旧正式版，也不是重新签名的正式发行包。
-
-飞牛版提供数据展示、硬件设置、自定义只读 Token、局域网地址提示及持久化数据卷。FPK 未在飞牛实机安装验收；Android 新版验证范围见模块说明。
-
-ESP8266 固件及旧 Docker 部署包仍可从 [历史 Releases](https://github.com/xushuojie/routermonitor-fnos/releases) 下载；本次未更新 ESP8266 固件。`nas-docker/` 保留独立 Docker 部署方式，最新 FPK 对应源码位于 `fnos/`。
-
-一台基于 ESP8266 和 240 × 240 彩屏的 NAS 桌面监控小电视。设备通过 HTTP 长连接每秒获取 NAS 展示状态，同时每 200 毫秒获取共享网络采样，显示网络与硬盘读写速率、CPU/GPU/内存占用、时间及四页轮播信息。
-
-本项目基于 [404SynapseNotFound/routermonitor](https://github.com/404SynapseNotFound/routermonitor) 修改，数据源由 Netdata 改为随仓库提供的 NAS 状态服务，并增加了 NAS 网页控制台、设备网页配网、Token 鉴权、夜间亮度和故障自动恢复。
-
-### 屏幕预览
-
-以下由当前固件的实际 LVGL 界面渲染，使用示例数据；图片原始尺寸均为 240 × 240，不是实机照片。
-
-| 24 小时流量 | 开机时间 |
-| --- | --- |
-| ![流量页](images/screen-traffic.png) | ![开机时间页](images/screen-uptime.png) |
-| CPU / 硬盘温度 | 存储空间 |
-| ![温度页](images/screen-temperature.png) | ![容量页](images/screen-storage.png) |
-
-## 功能
-
-- NAS 网页：实时概览、全量网卡发现、单卡/多卡统计、别名、拓扑校验、配置导入导出与管理员登录
-- `/status?display=1&v=2` 每 1 秒刷新 CPU、GPU、内存、硬盘读写和运行时间；温度每 5 秒、容量每 30 秒、滚动流量每 5 秒采样
-- `/net?v=2` 每 200 毫秒更新红色上传、蓝色下载折线，实时网速数字约每 1 秒更新；请求失败后退避重试，恢复后回到目标周期
-- 实时网速使用固定 42px 窄体数字，`HH:MM:SS` 使用固定 42px 原比例数字；等宽数字减少跳动，保留 5px 内容留白，四周与界面背景同色
-- 硬盘读写速率每 1 秒刷新
-- 近 24 小时流量、开机时间、CPU/最高硬盘温度、总容量/已用容量/占用率每 5 秒横向滑动轮播
-- NAS 每 5 秒独立采样并持久保存流量，屏幕断电不影响采集
-- 时间按 UTC+8 显示，附星期和日期，屏幕不显示时区字样
-- 配网 AP 使用随机 WPA2 密码；设备配置页面无需账号密码，保存仍使用 CSRF 校验
-- Wi-Fi、NAS 地址和 Token 只保存在设备 LittleFS，不写入固件源码
-- 夜间自动降低亮度
-- Wi-Fi 恢复后自动显示主页、校时并关闭临时 AP；NAS 故障退避重试，过期指标显示 `--`
-- 进入主界面后释放开机动画对象，降低运行时内存占用
-
-## 仓库结构
-
-```text
-.
-├─ include/TFT_eSPI_Setup.h  # 屏幕驱动与引脚
-├─ src/                      # ESP8266 固件和字体资源
-├─ android/                  # Android 手机/平板原生显示端
-├─ fnos/                     # 最新飞牛 FPK 服务端与打包源码
-├─ downloads/                # 最新 FPK、APK 与校验文件
-├─ docs/                     # 安装与使用说明书
-├─ nas-docker/               # NAS API、网页控制台、Dockerfile、Compose
-├─ platformio.ini            # PlatformIO 构建配置
-└─ images/                   # 项目图片
-```
-
-## 硬件
-
-两种配置都使用 ESP8266 / NodeMCU v2 和 4 MB Flash，界面为 240 × 240：
-
-| PlatformIO 环境 | 屏幕控制器 | CS | SPI 时钟 | 验证状态 |
-| --- | --- | --- | --- | --- |
-| `nodemcuv2`（默认） | ST7789，240 × 240 | 无，`-1` | 40 MHz | 已实机烧录；240 秒、47 次滑动、延迟联网及 NAS 故障恢复通过 |
-| `nodemcuv2_ili9341` | ILI9341，240 × 240 界面区域 | D8 | 27 MHz | 保留原仓库配置，编译验证，未实机验收 |
-
-公共接线：DC=D3、RST=D4、背光=D1、MOSI=D7、SCLK=D5。ST7789 配置与旧 `sd2` 项目实际选中的 `Setup24_ST7789.h` 一致。ILI9341 的原生面板通常为 240 × 320，本项目保持原有 240 × 240 界面，不会自动拉伸。
-
-固件不自动识别屏幕，烧录时必须选择对应环境。不同批次可能使用其他接线，按需修改 `include/TFT_eSPI_Setup.h` 后先运行 `pio run -e nodemcuv2 -e nodemcuv2_ili9341 --target clean` 再编译，避免复用旧驱动缓存。两套默认背光均按 D1 低电平有效处理；其他背光电路需相应调整。
-
-## 架构与部署
-
-```mermaid
-flowchart LR
-    NAS["NAS 内核计数与传感器"] --> Collector["Docker 共享采样"]
-    Collector --> API["HTTP API 与网页控制台"]
-    Collector --> History["SQLite 流量历史"]
-    Browser["浏览器：查看指标 / 选择网卡"] <--> API
-    API --> ESP["ESP8266：240 × 240 显示"]
-```
-
-网页和屏幕读取同一份采样快照。更改统计来源后，屏幕自动跟随，无需重新烧录。
-
-## 1. 部署 NAS 服务
-
-NAS 需安装 Docker Compose。获取仓库后执行：
-
-```bash
-git clone https://github.com/xushuojie/routermonitor-fnos.git
-cd routermonitor-fnos/nas-docker
-cp .env.example .env
-```
-
-编辑 `.env`：
-
-- `NAS_STATUS_IFACE`：首次启动默认 `physical`，自动发现并跟随物理网卡增减；网页仍可切换固定单卡或多卡
-- `NAS_STATUS_PORT`：对局域网开放的端口，默认 `18199`
-- `NAS_STATUS_TOKEN`：长随机 Token，可用 `openssl rand -hex 32` 生成
-
-保持 `NAS_STATUS_STORAGE_PATHS` 为空，随 Compose 启动的隔离采集器会自动发现 fnOS 数据卷，无需填写 `/vol1`、`/vol2` 等路径。升级旧部署时应清除旧路径配置，并使用完整的新 Compose（包含 `storage-discovery`）。模板使用 host 网络，确认所选端口未被占用。
-
-启动并测试：
-
-```bash
-docker compose up -d --build
-docker compose logs -f nas-status
-curl http://NAS局域网IP:18199/health
-curl -H "Authorization: Bearer 你的Token" http://NAS局域网IP:18199/status
-```
-
-详细说明见 [nas-docker/README.md](nas-docker/README.md)。不建议把该端口直接暴露到公网；优先在可信局域网、VPN 或防火墙白名单内使用。
-
-### 打开 NAS 网页控制台
-
-访问 `http://NAS局域网IP:18199/`。这是 NAS 服务的管理网页，与 ESP8266 的配网页面不同。
-
-首次启动会生成独立管理员密码；按仓库 Compose 模板部署时可读取：
-
-```bash
-docker compose exec nas-status cat /data/initial-admin-password.txt
-```
-
-也可在首次启动前设置 `NAS_STATUS_ADMIN_PASSWORD`（至少 12 个字符）。登录后在“设备与设置”中更改密码，原有 ESP Token 不受影响。
-
-- **数据概览**：网络曲线、上下行和磁盘速率、功率、CPU/GPU/内存、24h 流量、容量、温度、运行时间及实际来源。
-- **网络数据源**：默认显示物理端口，可展开虚拟接口、搜索、设置别名和查看原始计数/丢包/历史。选择后先预览，点击“应用设置”才会生效；不会修改 NAS 的 IP、网卡或路由。
-- **设备与设置**：显示端连接状态、只读 Token、配置导入导出、脱敏诊断和管理员密码。
-
-模板使用 host 网络获取宿主接口，端口由 `NAS_STATUS_PORT` 指定。设置、管理员密码哈希与逐接口历史持久化在原数据卷；升级保留旧组合历史。当前只有网络来源可在网页中选择，其他指标沿用自动检测和部署时的挂载配置，来源与不可用状态可在概览核对。
-
-## 2. 编译和烧录固件
-
-安装 [Visual Studio Code](https://code.visualstudio.com/) 和 PlatformIO 扩展，打开仓库根目录。连接 ESP8266 后运行 PlatformIO 的 Upload；或使用命令行：
-
-默认 ST7789：
-
-```bash
-pio run -e nodemcuv2
-pio run -e nodemcuv2 --target upload
-pio device monitor -e nodemcuv2
-```
-
-ILI9341：
-
-```bash
-pio run -e nodemcuv2_ili9341
-pio run -e nodemcuv2_ili9341 --target upload
-pio device monitor -e nodemcuv2_ili9341
-```
-
-仅验证两种配置能否编译（不烧录）：
-
-```bash
-pio run -e nodemcuv2 -e nodemcuv2_ili9341
-```
-
-不指定 `-e` 时默认使用 ST7789。两种环境分别输出到 `.pio/build/nodemcuv2/` 和 `.pio/build/nodemcuv2_ili9341/`，共用相同的 LittleFS 配置布局；切换程序固件不需要重新填写 Wi-Fi 和 NAS 参数。
-
-默认调试串口和烧录速率为 115200（当前 CH340 设备已验证稳定）。界面保留内置 Montserrat 12px 文本字体，数字使用 `src/DisplayFonts.c` 中的 22/42px 字体子集；可运行 `python3 scripts/generate_fonts.py` 从已安装的 LVGL 原始位图重新生成。网速数字在生成时固定为原宽度的 75%，时间保持原比例，所有数字采用固定步进，不在运行中缩放。R/W 和上下行箭头使用固定线条。显示缓冲为 5 行。启用 ESP8266 Core 的 `NON32XFER_HANDLER`，支持 LVGL 对 Flash 字形的字节读取，避免 Exception (3)。
-
-### 240 × 240 主屏布局
-
-| 区域 | 像素范围 | 排版 |
-| --- | --- | --- |
-| 背景色留白 | x/y=0–4、235–239 | 与界面背景同色，内容仍限制在 x/y=5–234 |
-| 实时上传/下载 | x=5–116、123–234，y=5–50 | 数字固定 42px 窄体、70px 槽；箭头 10×14、单位 12px，基线固定 |
-| 网络趋势 | x=10，y=51，220 × 18 | 红色上传、蓝色下载，每 200ms 更新，显示近 10 秒 |
-| 硬盘读/写 | x=5–116、123–234，y=69–93 | 数字固定 22px、53px 槽；R/W 固定 16 × 16、单位 12px |
-| 四页轮播 | x=5–234，y=95–136 | 内容 y=96–130、标题 12px、数值 22px；页点 y=132–134 |
-| 日期与时间 | x=5–234，y=138–184 | 左侧星期/日期 12px；`HH:MM:SS` 固定 42px、字间距 -2px |
-| POWER / CPU / GPU / MEM | 列起点 x=5、64、123、182，y=184–234 | 四列各 53px、间距 6px；数字为固定 22px 窄体，标题和 W 单位 12px，底部 53×5px 进度条（y=230–234） |
-
-网速与硬盘速率只在文本变化时更新，字号、图标和单位位置固定。实时速率保留最多三位有效数字，例如 `99.4 MB/s`、`100 MB/s`、`140 MB/s`、`999 MB/s`、`1.0 GB/s`；采用十进制单位。累计量保留一位小数，容量页使用三位有效数字与短单位。全部 86400 个时间组合实际宽度均为 174px，不超过 182px 时间槽。
-
-配色：全屏深蓝灰 `#101820`，网速与时间柔白 `#F2F5F7`，占用率标签和数值浅灰白 `#DCE4EA`，辅助文字 `#A9BAC7`；上传 `#FF7185`、下载 `#55CFFF`、读取 `#50DDB0`、写入 `#FFC66D`，分隔线与底槽 `#304451`。温度正常为浅灰白，CPU ≥75/85°C、硬盘最高温 ≥50/60°C 时分别黄/红提示；这些是界面提示阈值，不代表具体硬件的安全极限。离线时恢复中性色。
-
-POWER 使用淡紫色 `#B7A1FF`，进度条固定 0–35W，超过 35W 满格但继续显示真实读数；0–99.9W 保留一位小数，四舍五入到 100W 后显示整数，数据无效或离线显示 `-- W` 并清空条。功率为 UPS 输出端读数，WL W120 使用输出电压×电流计算，每 2 秒刷新；只有 UPS 单独给 NAS 供电时才对应整机直流输入功耗，不包含电源适配器损耗。
-
-轮播复用一个 230 × 35 内容层，旧页 200ms 缓入滑出、新页 200ms 缓出滑入；页点固定，移动期间保持内容不变，完成后显示最新快照。只在切页时设置布局，普通刷新只替换变化的文字和温度警示色。开机时间页居中显示 `7d 13h 24m`，数字 22px、单位 12px，小时/分钟补零且固定槽位；超过 999 天显示天和小时，离线显示 `--d --h --m`，分钟变化时更新文字。温度页采用上下对齐的标题与数值；容量页显示 `TOTAL/USED/USAGE`。数据过期时 CPU/GPU/MEM、硬盘和累计量统一显示 `--`，不保留看似正常的旧占用率。
+**Android 仍是测试版**：包名 `io.github.routermonitor.fnos.layouttest`，使用测试签名。Latest 表示最新下载入口，不表示 APK 已改成正式签名。FPK 尚未完成飞牛实机安装验收，测试范围见文末。
 
 <details>
-<summary>开发、协议与验证记录</summary>
+<summary>如何校验下载文件</summary>
 
-故障注入验收可临时定义 `MONITOR_WIFI_RECOVERY_TEST`：只在该测试固件中延迟正确 Wi-Fi 凭据 20 秒，不修改已保存配置；交付固件不启用此宏。
+将两个安装包和 `SHA256SUMS.txt` 放在同一目录。
 
-Wi-Fi 使用 Modem-sleep，主循环末尾执行 `delay(1)`，给 SDK 留出空闲时间；保持 200ms 网络采样、1s 状态更新及原有亮度和布局。只开启休眠或只减少空转未在本机功率计上观察到明显节电，两者结合的读数由约 0.64W 降至约 0.55W；这是用户现场读数，不是精密平均值，实际收益取决于接入点、信号、背光和硬件。
+Linux 执行 `sha256sum -c SHA256SUMS.txt`；macOS 执行 `shasum -a 256 -c SHA256SUMS.txt`，应显示 `OK`。
 
-省电验证（2026-09-05）：单项对照各 90 秒，Modem-sleep 与 `delay(1)` 两组均无请求失败；正常组合固件双屏编译与异步 HTTP 检查通过，用户确认功耗下降且无明显卡顿。组合固件串口记录到约 20 秒、78 次成功请求后 USB 数据连接中断，计划中的 3 分钟连续检查未完成；不能据此宣称长期稳定性已经验收。ILI9341 仍仅编译验证。
+Windows PowerShell：
 
-字形使用 512B 共用缓存，从 Flash 按字形复制后绘制，避免逐像素触发慢速字节读取。缓存前后五张 LVGL 画面逐字节一致。
-
-网络层使用 ESP8266 Core 自带 lwIP 异步 DNS/TCP 回调，`loop()` 按字节预算推进请求，不在 LVGL 回调里等待连接或响应。HTTP 响应限制头部/正文长度并验证完整性。服务器提供固定展示投影，避免温度传感器数量增加撑满设备 JSON 内存。HTTP/1.1 复用单条 TCP 连接，异常时关闭并退避重连；网络与状态请求公平调度，慢网络请求不会饿死状态更新。服务端独立按 200ms/1s/5s 采集网络/状态/流量历史，请求只读取快照。v2 用短数据源标识、流序号、数据年龄和重置标识保证连续性；每次最多补回 4 个网络点，重复样本不重画，长缺口或数据源切换清除旧曲线。GPU 等单项缺失显示 `--`，其余指标继续更新。旧服务/旧固件仍可使用原接口和短连接。协议详见 [服务端说明](nas-docker/README.md#通信协议-v2)。
-
-可运行以下检查：
-
-```bash
-python3 -m unittest discover -s nas-docker -p 'test_*.py' -v
-python3 tests/check_net_rate.py
-python3 tests/check_layout.py
-python3 tests/check_config_portal.py
-python3 tests/check_config_portal_runtime.py
-python3 tests/check_async_http.py
-python3 tests/check_protocol.py
-python3 tests/render_ui.py /tmp/routermonitor-ui
+```powershell
+Get-FileHash .\routermonitor-fnos-1.3.0-5-amd64.fpk -Algorithm SHA256
+Get-FileHash .\routermonitor-android-1.1.5-adaptive-test.apk -Algorithm SHA256
 ```
 
-布局测试覆盖全部可输出数字组合；渲染检查编译真实 `main.ino` UI 与主机 LVGL，输出四页及极限数字画面，并逐像素验证 5px 边缘与界面背景同色。主机仅替换设备 I/O，因 64 位指针使用更大的 LVGL 内存池，不能代替实机内存或屏幕验收。串口 `HTTP/PERF/STATE` 诊断分别记录请求、系统堆/最大连续块/LVGL 独立池/动画帧间隔与有效数据状态。本轮通信升级双屏固件静态 RAM 为 63768B（77.8%）。ST7789 实测 100 秒，包含暂停服务 8 秒并重启容器：正常阶段 76 个请求共用 1 条 TCP 连接；故障阶段出现预期的 6 次网络、4 次状态失败，恢复后的 60 秒未新增失败、未重启。最低空闲堆 11832B，LVGL 池最低记录 3296B，轮播持续运行；动画有超过 50ms 的帧，不宣称恒定 60FPS。另以两个客户端验证 132 次 HTTP 请求共用两条连接，容器内响应中位数 1.53ms、最大 17.44ms。ILI9341 仍仅编译验证。
-
-流量统计不会补造部署前的历史；默认合计物理网卡经过网线的局域网传输、广播与协议开销，虚拟网卡不重复累加。SQLite 每 5 秒持久采样，窗口边界按区间比例估算；升级保留旧区间，无法核实的迁移边界不补算。详见服务端说明。
-
-UPS 功率版本验收（2026-09-05）：14 项服务端测试、布局/功率边界渲染检查和双屏编译通过。ST7789 烧录后观察 45 秒，四页轮播正常，串口最后一次统计网络 164/164、状态 33/33 成功，无请求失败、异常或重启，功率有效。最低系统空闲堆 12976B，LVGL 池最低空闲 3304B；ILI9341 仅编译验证。
+将输出与校验文件逐项对照。
 
 </details>
 
-## 3. 首次配网
+<a id="quick-start"></a>
+## 第一次使用：从安装到连接
 
-1. 小电视超过 15 秒无法连接已保存 Wi-Fi 时，会建立 `RouterMonitor-XXXXXX` 热点；屏幕和本地串口显示本次随机 AP 密码。
-2. 连接该热点并访问 `http://192.168.4.1/`，填写 Wi-Fi、NAS 地址、端口及 Token。
-3. 保存后设备自动重启。配置页不要求账号密码；AP 首配仍需连接带随机 WPA2 密码的热点。
-4. 能访问 ESP8266 的人均可修改设备配置，因此仅在可信局域网使用，不要将设备配置端口映射到公网。页面不会回显原有敏感配置，NAS 服务端网页仍使用独立管理员登录。
-5. Wi-Fi 恢复后关闭临时 AP/DNS，局域网配置仍可通过设备 IP 访问。路由器启动较慢时无需手工重启屏幕。
+```mermaid
+flowchart LR
+    A[飞牛安装 Docker] --> B[手动安装 FPK]
+    B --> C[设置端口和管理员密码]
+    C --> D[浏览器登录控制台]
+    D --> E[复制局域网地址和 Token]
+    E --> F[Android 保存并连接]
+    E --> G[ESP8266 配网连接]
+```
 
-配置先写临时文件、完整读回校验，再通过 LittleFS rename 替换，保留已验证的备份以恢复中断保存。挂载失败不会自动格式化；仅能确认整个分区均为擦除态时才执行首次初始化。文件系统已损坏时保留恢复提示，不自动擦除数据。
+1. **先装服务端**：在飞牛应用中心手动安装 FPK，填写端口和管理员密码。
+2. **确认网页能打开**：访问 `http://NAS局域网IP:18199`；修改过端口则使用实际端口。
+3. **获取连接信息**：登录后进入 **设置 → 设备与管理 → 安卓 / ESP8266 显示端**，复制局域网地址、查看只读 Token。
+4. **连接 Android App**：填入上述地址和 Token，点击 **保存并连接**。
+5. **按需选择统计范围**：网页设置中选择存储卷和网卡；也可先保持自动发现，观察基础数据。
 
-亮度可在配置页调整：当前电路 PWM 数值越小越亮，0 最亮，255 关闭；默认白天 180、夜间 235，夜间时段为北京时间 23:00–07:00。
+| 信息 | 用途 | 获取方式 |
+| --- | --- | --- |
+| 服务地址 | 浏览器与显示端连接 NAS | 如 `http://192.168.1.10:18199`，示例 IP 需替换 |
+| 管理员密码 | 网页登录和管理 | 飞牛安装向导中自行设置 |
+| 只读 Token | Android / ESP8266 读取指标 | 网页“设备与管理”查看或自定义 |
 
-配置页不会回显已保存的 Wi-Fi 密码或 Token。敏感配置保存在 ESP8266 的 LittleFS 中；转让设备前应擦除 Flash。
+**管理员密码与只读 Token 不可互换。** App 不需要管理员密码，网页登录也不能用 Token 代替密码。
 
-## 数据与兼容性
+<a id="android-app"></a>
+## Android App：把手机和平板变成 NAS 监控屏
 
-- CPU、内存、网络和运行时间来自宿主机只读挂载的 `/proc`、`/sys`
-- 首次默认自动跟随物理网卡增减；旧部署保留原选择，可在网页选择“自动发现物理端口”；固定单卡、多卡模式继续保留，已知上下层重复统计会被拒绝
-- 硬盘读写速率来自全部物理块设备的 Linux 计数器；RAID 会体现底层硬盘的实际 I/O
-- 容量由隔离采集器每 30 秒扫描宿主机已挂载的 fnOS 数据卷，去重后合计；任一发现的卷不可读时显示不可用，不输出偏小的总量（详见[自动发现与边界](nas-docker/README.md#硬盘读写与存储容量)）
-- CPU 温度综合读取 thermal zone 与 hwmon，识别 Intel `coretemp`、AMD `k10temp/zenpower` 及常见 ARM CPU thermal
-- 最高硬盘温度合并内核 `drivetemp`/`nvme` hwmon 与 smartd 的新鲜 ATA 日志
-- GPU 使用率支持 Intel i915 debugfs 和 AMDGPU sysfs；NVIDIA 或未暴露指标的 GPU 标记为不可用，网页与 v2 固件显示 `--`
-- 固件使用流式 JSON 过滤，避免在 ESP8266 内存中保存完整响应
+原生 Java + Canvas 显示，无 WebView、Google Play 服务或原生 `.so` 依赖。横屏、竖屏、平板和分屏会按实际窗口重新排版；字号跟随系统字体比例，窗口过小时可上下滚动。
 
-飞牛 NAS 本质上运行 Linux，但不同机型使用的内核、CPU、GPU 和传感器驱动并不完全相同，因此无法承诺每台设备都具备全部指标。服务会保证 CPU、内存、网络和开机时间尽可能通用；温度和 GPU 属于硬件/驱动可选项，取不到时不会影响其他数据显示。
+### 界面预览
 
-## 安全说明
+<p align="center"><img src="images/android-phone.png" width="300" alt="Android 手机竖屏模拟器截图：时钟、网络、磁盘和指标卡片"></p>
 
-公网首选按[HTTPS 部署说明](nas-docker/README.md#公网访问与安全边界)配置固定域名、可信代理和入口限速，并关闭原始 18199 公网映射。HTTPS 模式管理 Cookie 使用 `Secure`；显式 HTTP 模式的配置与限制见同一说明。ESP 继续使用局域网 API。
+*手机竖屏：大字时间、网速曲线、磁盘读写、轮播信息和底部指标纵向排列。*
 
-- `.env`、Token、固件二进制和 PlatformIO 缓存已被 `.gitignore` 排除
-- API 启动时强制要求 Token
-- Compose 仅只读挂载系统指标目录、smartd 日志和明确配置的 NAS 数据卷根目录，不挂载 Docker socket
-- HTTP Token 在网络中不是加密传输；不要将服务直接映射到互联网
-- 已经公开过的 Token 应立即轮换，仅从 Git 历史删除字符串并不等于撤销泄露
+![Android 平板横屏模拟器截图：双列布局和展开卡片](images/android-tablet.png)
+
+*平板横屏：空间足够时展开辅助信息卡片。以上两图是已有 Android 1.1.0 / API 37 模拟器截图，使用极限示例数据检查布局，不是 1.1.5 实机截图。1.1.5 另增加全屏、OLED 保护及分系统设置风格。*
+
+### App 能显示什么
+
+| 区域 | 显示内容 | 使用提示 |
+| --- | --- | --- |
+| 时间 | 大字时钟、星期和日期 | 使用上海时区，支持服务端时间校准 |
+| 网络 | 上传、下载与近 60 秒曲线 | 上传红色、下载蓝色；纵轴按窗口峰值调整 |
+| 磁盘 | 实时读写速率 | 来自 NAS，不是手机自身读写 |
+| 轮播 / 展开卡片 | 24 小时流量、运行时间、温度、存储空间 | 默认轮播；大平板可常驻展开 |
+| 指标卡片 | 功率、CPU、GPU、内存 | 不支持或过期的读数显示 `—`，不当作 0 |
+
+### 安装与第一次连接
+
+1. 在 Android 下载 APK，按系统提示允许当前下载来源安装应用。
+2. 打开 **NAS Monitor 布局测试**。
+3. 点击右上角设置入口，或长按画面，打开 **NAS 显示终端设置**。
+4. 输入服务**根地址**，例如 `http://192.168.1.10:18199`，不要附加 `/status`、`/net` 或网页登录路径。
+5. 输入网页提供的**只读 Token**，确认没有多余空格或换行。
+6. 点击 **保存并连接**，检查在线状态及指标是否持续刷新。
+7. Android 17 如提示局域网访问权限，请授权；之前拒绝过可从 App 设置的局域网权限入口恢复。
+
+```mermaid
+flowchart TD
+    A[网页：设置 → 设备与管理] --> B[复制局域网服务地址]
+    A --> C[查看 / 复制只读 Token]
+    B --> D[App：服务地址]
+    C --> E[App：只读 Token]
+    D --> F[保存并连接]
+    E --> F
+    F --> G[确认在线和实时指标]
+```
+
+连接信息在这里获取。图中 IP 为示例，以自己的 NAS 页面为准：
+
+![设备与管理：连接地址、Token、管理员密码和配置导出](images/guide/web-management.png)
+
+### 亮度、夜间模式与 OLED 设置
+
+| 设置 | 默认 / 范围 | 作用 |
+| --- | --- | --- |
+| 日间亮度 | 默认 30%；10–100% | 只调整 App 窗口亮度，不改系统全局设置 |
+| 定时夜间模式 | 默认开启 | 可关闭自动夜间切换 |
+| 夜间起止时间 | 默认 23:00–07:00 | 点击时间选择器修改，精确到分钟，支持跨午夜 |
+| 夜间亮度 | 默认 10%；1–100% | 与日间亮度独立，保存后立即生效 |
+| OLED 保护 | 默认开启 | 纯黑背景、柔和白字和定时微移 |
+| 闲置降亮度 | 默认开启 | 5 分钟无操作后，约 1 分钟逐步降至当前亮度的 60%，最低 1% |
+| 网络曲线刷新 | 均衡 500ms；可选 200ms | 控制 App 请求节奏，不保证高于服务端采样速度 |
+| 平板展开 | 可在设置中切换 | 大窗口常驻辅助卡片，关闭后恢复轮播 |
+
+夜间按上海时区计算，开启时刻计入夜间，关闭时刻恢复日间亮度；起止时间相同时表示全天夜间。触摸、键盘操作、进入设置或返回 App 会恢复当前时段亮度。
+
+OLED 微移每分钟进行一次，范围为水平 / 垂直 ±4 个物理像素。这些措施只能降低长期显示风险，不能保证避免烧屏。前台保持亮屏，后台停止轮询并允许系统休眠；当前没有后台常驻和开机自启。
+
+### 分系统设置风格
+
+| 系统 | 1.1.5 设置界面 |
+| --- | --- |
+| Android 4.3–4.4 / API 18–20 | 系统 Holo |
+| Android 5–11 / API 21–30 | 系统 Material |
+| Android 12+ / API 31+ | 随应用打包的 Material 3 |
+
+设置打开时跟随系统深浅色。Material 3 来自应用组件库，不依赖厂商提供同款界面。布局、协议和构建细节见 [Android 模块说明](android/README.md)。
+
+### 升级与设置保留
+
+- **同签名 1.1.1–1.1.4 测试版**：可覆盖安装，保留地址、Token 和偏好设置。
+- **旧正式版**：与本测试版包名不同，可并存；首次使用测试版需重新配置。
+- **自行编译版本**：默认 debug 签名可能不同，不能保证覆盖已安装测试版。源码不含签名私钥。
+- 覆盖安装失败先核对包名和签名，不要急于卸载；卸载会清除该 App 自身设置。
+
+<a id="fnos-install"></a>
+## 飞牛 FPK：安装、升级与数据保留
+
+FPK 将服务端、网页资源、安装向导和离线 Docker 镜像打包在一起。装好后从浏览器即可管理，不必再安装网页程序。
+
+### 安装前准备
+
+- NAS 为 **x86-64 / amd64** 架构；当前 FPK 不是 ARM 安装包。
+- Docker 已安装且可以正常启动容器。
+- 准备未占用的端口，默认 `18199`。
+- 准备非空管理员密码，两次输入必须一致。
+- 手机或电脑能访问 NAS 所在网络。
+
+### 图解安装流程
+
+```mermaid
+flowchart TD
+    A[下载 amd64 FPK 并校验] --> B[飞牛应用中心：手动安装]
+    B --> C[选择 FPK 文件]
+    C --> D[填写端口、管理员密码和确认密码]
+    D --> E[完成安装并启动 NAS Monitor]
+    E --> F[浏览器访问 NAS IP:实际端口]
+    F --> G[用安装时的密码登录]
+    G --> H[获取 App 连接地址和 Token]
+```
+
+*流程图为操作示意，不是飞牛应用中心实机截图。不同飞牛版本的手动安装入口位置可能不同，以系统界面为准。*
+
+1. 在飞牛应用中心找到**手动安装 / 本地安装**入口，选择 `routermonitor-fnos-1.3.0-5-amd64.fpk`。
+2. 在 **NAS Monitor 初始设置**向导填写下表内容。
+3. 完成安装并启动应用。首次启动需加载包内镜像，等待应用进入运行状态。
+4. 浏览器访问 `http://NAS的IP:实际端口`，例如 `http://192.168.1.10:18199`。
+5. 输入安装时的管理员密码。先检查 CPU、内存和网络，再按需选择其他硬件来源。
+
+| 向导字段 | 应填内容 | 常见错误 |
+| --- | --- | --- |
+| 网页 / 设备接口端口 | 默认 `18199`，允许 `1024–65535` | 填入完整 URL 或使用被占用端口 |
+| 设置管理员密码（非空即可） | 自己设置的网页密码 | 误认为 Android 的只读 Token |
+| 再次输入管理员密码（非空即可） | 与上一次一致 | 两次输入不一致 |
+
+![FPK 安装后打开的网页登录界面](images/guide/web-login.png)
+
+*FPK 用户使用安装向导中设置的密码。登录页“第一次使用”提到的初始密码文件主要用于自动生成密码的部署场景。*
+
+### 升级、端口与密码
+
+| 操作 | 当前行为 | 操作后检查 |
+| --- | --- | --- |
+| 安装新版 FPK | 应用中心升级，沿用持久化数据卷 | 应用状态、登录和历史数据 |
+| 升级时端口留空 | 沿用当前端口 | 使用原地址访问 |
+| 升级时密码留空 | 沿用当前密码 | 使用原密码登录 |
+| 升级时填写两次新密码 | 重设管理员密码 | 用新密码登录 |
+| 修改端口 | 网页与显示端地址一起变化 | 同步更新 Android / ESP8266 地址 |
+| 网页修改 Token | 新 Token 立即生效，旧值失效 | 所有显示端同步更新 |
+
+数据卷 `routermonitor-fnos-data` 保存设置、凭据及流量历史，升级和卸载保留该卷。重新安装时，安装向导填写的密码会重设管理员密码，Token 和历史仍从保留的数据卷读取。手动删除数据卷会丢失持久化数据；升级前可按自己的备份方案备份该卷。
+
+网页“导出数据源配置”只包含网卡选择与别名，不是整个数据卷备份，也不包含全部硬件设置、管理员密码或 Token。
+
+### FPK 与独立 Docker 部署
+
+| 方式 | 目录 | 说明 |
+| --- | --- | --- |
+| 最新飞牛 FPK | `fnos/` | 飞牛应用中心安装、升级；本页新版网页与硬件功能对应此目录 |
+| 独立 Docker | `nas-docker/` | 此前的独立部署版本，自行管理 Compose；功能与最新 FPK 有差异 |
+
+不要把旧 Compose 模板与 FPK 生命周期文件混用。同一 NAS 再启动独立部署需避开端口和数据配置冲突。独立部署步骤见 [nas-docker/README.md](nas-docker/README.md)。
+
+<a id="web-console"></a>
+## 网页控制台：详细使用教程
+
+左侧有 **数据展示**和**设置**两个页面；设置页可快速定位到 **设备与管理、硬件与采集、网络数据源**。
+
+以下图片由 1.3.0-5 实际网页前端配合固定示例 API 数据生成，不包含真实密码、Token 或实机性能数据。来源和复现方式见 [截图说明](docs/screenshots/README.md)。
+
+### 1. 数据展示：读懂指标
+
+![网页数据展示全景](images/guide/web-overview.png)
+
+| 数据块 | 含义 | 注意事项 |
+| --- | --- | --- |
+| 网络吞吐 | 所选接口上传 / 下载，近 30 秒曲线 | 包含局域网传输，不是单纯互联网流量 |
+| 硬盘读写 | 物理块设备合计 I/O | RAID 体现底层设备实际读写，不等于共享文件夹速度 |
+| 功率 | UPS 的可用功率读数 | 不是根据 CPU 占用率估算；缺少数据时显示不可用 |
+| CPU / GPU / 内存 | 宿主机占用与来源 | GPU 依赖驱动与数据源；一项不可用不影响其他项 |
+| 24 小时流量 | 已观测历史滚动统计 | 初装不补造安装前数据，留意覆盖时长 |
+| 存储空间 | 所选文件系统去重后的容量 | 配合逐卷卡片核对计入范围 |
+| 温度与运行时间 | CPU、硬盘温度及 NAS 运行时长 | 来源可在硬件设置中选择 |
+
+网页曲线显示近 **30 秒**，Android 显示近 **60 秒**，窗口长度不同。服务断开或数据过期时隐藏旧读数，恢复后自动更新。
+
+### 2. 逐卷空间：确认容量范围
+
+![逐卷空间：路径、文件系统、使用率和计入状态](images/guide/web-volumes.png)
+
+每卷显示挂载路径、文件系统、底层来源、已用 / 总容量和计入状态。先看合计，再核对每卷。
+
+- 重复挂载和 Btrfs 子卷去重，避免重复计算。
+- 手选卷掉线时合计可能不可用，避免给出偏小总量。
+- 同路径换盘后，先移除该路径并保存，再重新选择以更新卷身份。
+- ZFS 同池数据集可能共享空间，无法可靠相加时保留逐卷信息、合计标记不可用。
+- 网络共享、伪文件系统和容器挂载不作为本地存储自动计入；未挂载的裸硬盘没有文件系统空间可统计。
+
+### 3. 设备与管理：复制连接信息
+
+![设备与管理：局域网地址、只读 Token 与管理工具](images/guide/web-management.png)
+
+1. 打开 **设置 → 设备与管理**。
+2. 找到 **安卓 / ESP8266 显示端**卡片。
+3. 点击 **复制局域网地址**；多网卡时选择手机能访问的地址。
+4. 点击 **查看只读 Token**，复制到 App 或 ESP8266。
+5. 连接成功后，检查“显示端在线”“最近显示端”“最近通信”。
+
+“最近显示端”是最近通信的设备，不是全部设备列表。通过飞牛远程入口打开网页时，这里仍提供 NAS 局域网地址；不要把远程门户页面 URL 直接粘贴到 App。
+
+### 4. 自定义只读 Token
+
+<p align="center"><img src="images/guide/web-token.png" width="620" alt="自定义 Token：两次输入与保存按钮"></p>
+
+1. 展开 **自定义只读 Token**。
+2. 输入新 Token，并再次输入确认。
+3. 点击 **保存新 Token**，等待成功提示。
+4. 同步修改所有显示端的 Token。
+
+允许 1–512 个 ASCII 可见字符，可含英文、数字和符号，不含空格、中文或换行。保存立即生效，不需重启；旧 Token 随即失效。只读 Token 只能获取指标，不能登录网页或修改数据源。
+
+### 5. 硬件与采集
+
+![硬件设置：存储卷、温度、GPU、UPS 与采集档位](images/guide/web-hardware.png)
+
+#### 选择存储卷
+
+1. 打开 **硬件与采集 → 存储空间**。
+2. 默认 **自动发现本地存储卷**，可先保持默认检查发现结果。
+3. 只想统计部分卷时切换为 **手动选择存储卷**。
+4. 勾选所需卷；也可填写宿主机绝对路径，每行一个，如 `/vol1`、`/mnt/usb`。
+5. 点击 **保存硬件设置**，回到数据展示检查逐卷信息和合计。
+
+路径是飞牛宿主机路径，不是电脑盘符或容器内部 `/data`。手动模式至少选择一个范围；不要填写不存在的目录或含 `..` 的路径。
+
+#### 温度与显卡
+
+- CPU 温度可自动选择、指定传感器或关闭。
+- 硬盘温度默认自动取最高值，也可指定或关闭。
+- GPU 可自动、手选或关闭。AMD 使用系统利用率；Intel 使用可用引擎计数或宿主机 `intel_gpu_top`；NVIDIA 使用宿主机已有 `nvidia-smi`。
+- 列表来自实际检测。没有驱动、工具或可读来源时显示原因；应用不会安装驱动或工具。Intel 取可用引擎中的最高利用率，不是简单相加。
+
+#### UPS 设置
+
+| 方式 | 需要填写 | 使用场景 |
+| --- | --- | --- |
+| 自动 | 通常无需填写 | 自动发现本机 NUT |
+| 本机 NUT | 已发现 socket 或绝对路径 | NAS 本机 NUT 服务 |
+| 远程 NUT | 主机、端口、设备名 | 默认端口 `3493`；设备名与 NUT 配置一致 |
+| 关闭 | 无 | 不采集 UPS |
+
+保存后回到数据展示确认功率与诊断。没有有功功率时不会将 VA 当成 W；UPS 如果给多个设备供电，其输出功率不能等同于 NAS 单机功耗。
+
+#### 采集档位
+
+| 档位 | 网络 | 状态 | 存储 | 温度 | UPS |
+| --- | --- | --- | --- | --- | --- |
+| 实时 | 0.2 秒 | 1 秒 | 30 秒 | 5 秒 | 2 秒 |
+| 标准 | 0.5 秒 | 1 秒 | 45 秒 | 10 秒 | 5 秒 |
+| 低占用 | 1 秒 | 2 秒 | 60 秒 | 15 秒 | 10 秒 |
+
+选择“运行模式”后点 **保存硬件设置**。流量历史持久化仍为每 5 秒；网页硬件清单与诊断约每 10 秒刷新。服务端采集档位与 Android 的 200ms / 500ms 请求频率是独立设置。
+
+### 6. 网络数据源：网卡、别名与合计
+
+![网络数据源：接口选择、预览与应用设置](images/guide/web-network.png)
+
+1. 打开 **设置 → 网络数据源**。
+2. 查看接口名称、类型、链路速率和 IP。默认显示物理端口，可展开虚拟接口、搜索和设置别名。
+3. 选择自动发现、单卡或多卡统计，核对勾选接口。
+4. 点击 **验证选择**，检查合计预览与拓扑警告。
+5. 确认后点击 **应用设置**；只做预览不会改变正式统计。
+6. 回到数据展示核对来源标识。Android 和 ESP8266 自动跟随新统计范围。
+
+避免同时合计同一流量经过的上下层接口，例如物理网卡与网桥、聚合接口。系统检查已知重复关系，仍需结合实际拓扑。此操作只改变监控统计范围，不修改 NAS 的 IP、网卡或路由。
+
+**三个保存按钮相互独立**：硬件点“保存硬件设置”，网卡点“应用设置”，Token 点“保存新 Token”。
+
+### 7. 密码、配置与诊断
+
+- **管理员密码**：输入当前密码、新密码，点击“更新密码”。所有网页会话退出，重新登录即可；Token 不变。
+- **导出数据源配置**：导出网卡选择和别名 JSON，不包含密码或 Token。
+- **导入配置**：选择 JSON，检查预览，再点“应用设置”，不是导入后立即生效。
+- **脱敏诊断**：用于定位硬件来源和不可用原因，不是完整备份。
+- **重新载入硬件设置**：恢复服务端已保存值，可放弃当前未保存更改。
+
+### 8. 手机浏览器
+
+<details>
+<summary>展开手机网页长截图（真实前端，示例数据）</summary>
+
+<p align="center"><img src="images/guide/web-mobile.png" width="340" alt="手机网页：纵向排列的完整监控页面"></p>
+
+</details>
+
+手机浏览器也能查看和管理，不必安装 App。App 更适合常亮大字显示，网页提供完整管理；两者都需要能访问 NAS。
+
+<a id="esp8266"></a>
+## ESP8266 桌面小屏幕
+
+![ESP8266 NAS 监控小电视实拍](images/device-photo.png)
+
+支持 ESP8266 / NodeMCU v2 + ST7789 240×240，或 ILI9341 的 240×240 显示区域。与 Android 共用指标接口，本次 Release 未更新固件。
+
+| 流量 | 运行时间 | 温度 | 存储 |
+| --- | --- | --- | --- |
+| ![流量](images/screen-traffic.png) | ![运行时间](images/screen-uptime.png) | ![温度](images/screen-temperature.png) | ![存储](images/screen-storage.png) |
+
+*以上小屏图由实际 LVGL 界面使用示例数据渲染，不是实机照片。*
+
+首次无法连接 Wi-Fi 时会建立 `RouterMonitor-XXXXXX` 热点，屏幕显示本次随机密码。连接后访问 `http://192.168.4.1/`，填写 Wi-Fi、NAS 地址、端口和 Token。接线、PlatformIO 编译、烧录、配网与历史验证见 [ESP8266 参考](docs/ESP8266-guide.md)。
+
+<a id="faq"></a>
+## 常见问题与排查
+
+| 问题 | 处理顺序 |
+| --- | --- |
+| FPK 安装或启动失败 | 核对 amd64、Docker 状态、文件校验和端口占用，查看应用及容器日志 |
+| 网页打不开 | 确认应用启动、NAS IP 和端口正确，再查防火墙与网络 |
+| 网页密码错误 | 用安装时的管理员密码，不是 Token；可通过升级向导填写两次新密码重设 |
+| 电脑能打开，手机打不开 | 检查访客 Wi-Fi、客户端隔离及手机到 NAS 的网络可达性 |
+| App 连接失败 | 先在同一手机浏览器访问 NAS，再查根地址、端口、Token 与局域网权限 |
+| 改 Token 后掉线 | 旧值已失效，给所有显示端更新新值 |
+| 横屏显示不全 | 使用新版测试 APK；短窗口或大字体时可滚动；设置入口在顶部 |
+| 夜间亮度不对 | 核对上海时区起止时间、日夜亮度与闲置降亮度；起止相同为全天夜间 |
+| GPU / 温度 / UPS 不可用 | 检查采集状态、来源选择、驱动、工具和 NUT；未知值不会伪装成 0 |
+| 容量不符 | 核对逐卷范围、卷掉线、同路径换盘和 ZFS 共享空间 |
+| 24h 流量没有一天 | 初装从实际观测开始，切换接口后还要看共同覆盖时长 |
+| 设置没有生效 | 使用对应区域保存按钮；网络预览后需“应用设置” |
+| APK 签名冲突 | 核对包名、测试签名；自行构建包可能不能覆盖当前包 |
+| 卸载重装历史还在 | FPK 默认保留数据卷，卸载不等于清空数据 |
+
+建议按 **应用状态 → 地址与端口 → 手机网络 → 密码 / Token → 硬件来源** 排查，先解决连接，再判断单项硬件。
+
+### 访问与凭据
+
+默认 HTTP 不加密，优先使用可信局域网或 VPN。不要在问题报告中公开 Token，泄露后在网页轮换。不同部署方式的反向代理与远程入口配置存在差异，旧 `nas-docker/` 的安全配置选项不等于当前 FPK 已实现同样选项。
+
+<a id="development"></a>
+## 源码、构建与验证范围
+
+```text
+.
+├─ android/             Android 原生 App、Gradle 与测试
+├─ fnos/                最新飞牛服务端、生命周期和打包源码
+│  ├─ app/web/          本页新版 HTML / CSS / JavaScript
+│  ├─ package/          已发布 FPK 的可读安装资源快照
+│  └─ tests/            后端、硬件、Token、存储与接口测试
+├─ nas-docker/          此前的独立 Docker 部署版本
+├─ src/                 ESP8266 固件
+├─ include/             屏幕驱动与引脚
+├─ downloads/           FPK、APK 与校验文件
+├─ docs/                说明书、ESP8266 参考与截图脚本
+└─ images/              照片、模拟器截图和网页教程图
+```
+
+| 任务 | 入口 |
+| --- | --- |
+| Android 构建 | [构建说明](android/README.md#构建与验证)，需要 JDK、SDK、Gradle 依赖及合适的签名密钥 |
+| 飞牛重打包 | [构建说明](fnos/README.md)，`python3 fnos/build_fpk.py`，复用发布包离线镜像基底 |
+| FPK 校验 | `python3 fnos/verify_fpk.py` |
+| 后端测试 | Linux / WSL：`python3 fnos/tests/run_all.py` |
+| 局域网前端测试 | `node fnos/tests/test_lan_ui.cjs` |
+| 网页截图复现 | [截图来源和步骤](docs/screenshots/README.md) |
+| ESP8266 编译烧录 | [详细参考](docs/ESP8266-guide.md#2-编译和烧录固件) |
+
+已完成发布验证：50 项 Linux 后端测试、局域网地址前端测试、FPK / OCI 摘要和源码一致性校验、重新打包校验、APK v1/v2/v3 签名校验。Android 1.1.5 有 13 项 Robolectric 控件测试通过报告。已有 Android 4.3 手机及 API 37 模拟器记录主要来自旧正式版，不能视为新版所有机型验收。
+
+尚未完成飞牛 FPK 实机安装验收、Android 测试版全部目标机型验收及长期压力测试。ST7789 有历史实机验证，ILI9341 仅编译验证。示例图片不能用来判断某台 NAS 一定支持全部指标。
 
 ## 许可证与致谢
 
-本项目是 `404SynapseNotFound/routermonitor` 的衍生版本，继续使用 [GNU GPL v3](LICENSE)。界面字体及数字子集均派生自 LVGL 依赖中的 Montserrat 位图，不使用 Windows 系统字体。感谢原作者及 LVGL、TFT_eSPI、ArduinoJson、PlatformIO 等开源项目。
+基于 [404SynapseNotFound/routermonitor](https://github.com/404SynapseNotFound/routermonitor) 修改，继续使用 [GNU GPL v3](LICENSE)。感谢原作者及 LVGL、TFT_eSPI、ArduinoJson、PlatformIO、AndroidX、Material Components 等开源项目。ESP8266 字体子集派生自 LVGL 的 Montserrat 位图。
