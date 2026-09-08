@@ -1,0 +1,8 @@
+pluginManagement { repositories { mavenCentral(); google(); gradlePluginPortal() } }
+dependencyResolutionManagement {
+    repositories {
+        google { content { includeGroupByRegex 'androidx.*'; includeGroupByRegex 'com.android.*'; includeGroup 'com.google.android.material' } }
+        mavenCentral()
+    }
+}
+rootProject.name = 'NasMonitor'

@@ -32,7 +32,7 @@ import java.util.TimeZone;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
-public final class MainActivity extends Activity {
+public final class MainActivity extends androidx.fragment.app.FragmentActivity {
     final Handler ui = new Handler();
     MonitorView display;
     SharedPreferences prefs;
@@ -40,21 +40,27 @@ public final class MainActivity extends Activity {
     volatile HttpURLConnection netConnection, statusConnection;
     volatile int generation;
     boolean resumed, configuring;
-    long lastLog;
+    long lastLog,lastInteraction=SystemClock.elapsedRealtime();
+    @Override public void onUserInteraction(){super.onUserInteraction();wakeDisplay();}
+    void wakeDisplay(){lastInteraction=SystemClock.elapsedRealtime();if(prefs!=null)applyBrightness();}
 
     @Override public void onCreate(Bundle state) {
+        if(Build.VERSION.SDK_INT>=31)setTheme(SettingsUi.dark(this)?com.google.android.material.R.style.Theme_Material3_Dark_NoActionBar:com.google.android.material.R.style.Theme_Material3_Light_NoActionBar);
+        else if(Build.VERSION.SDK_INT>=21)setTheme(SettingsUi.dark(this)?android.R.style.Theme_Material_NoActionBar:android.R.style.Theme_Material_Light_NoActionBar);
         super.onCreate(state);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        PlatformUi.fullscreen(this);
         prefs = getSharedPreferences("display", MODE_PRIVATE);
         display = new MonitorView(this);
         setContentView(display);
         PlatformUi.install(display);
         if (prefs.getString("token", "").length() == 0) ui.post(new Runnable() { public void run() { settings(); }});
     }
-    @Override public void onResume() { super.onResume(); resumed = true; start(); ui.post(tick); }
+    @Override public void onResume() { super.onResume(); wakeDisplay(); PlatformUi.fullscreen(this); resumed = true; start(); ui.post(tick); }
+    @Override public void onWindowFocusChanged(boolean focused){super.onWindowFocusChanged(focused);if(focused&&!configuring)PlatformUi.fullscreen(this);}
     @Override public void onPause() { resumed = false; ui.removeCallbacks(tick); stop(); super.onPause(); }
     @Override public void onBackPressed() { super.onBackPressed(); }
-    @Override public void onConfigurationChanged(android.content.res.Configuration config){super.onConfigurationChanged(config);display.relayout();}
+    @Override public void onConfigurationChanged(android.content.res.Configuration config){super.onConfigurationChanged(config);PlatformUi.fullscreen(this);display.relayout();}
     @Override public boolean onCreateOptionsMenu(android.view.Menu menu) { settings(); return false; }
 
     final Runnable tick = new Runnable() { public void run() {
@@ -74,6 +80,8 @@ public final class MainActivity extends Activity {
         if(display.serverClock>0)c.setTimeInMillis(display.serverClock+SystemClock.elapsedRealtime()-display.clockAt);
         int minute=c.get(Calendar.HOUR_OF_DAY)*60+c.get(Calendar.MINUTE);
         if(prefs.getBoolean("night",true)&&DisplayMath.nightActive(minute,prefs.getInt("night_start",1380),prefs.getInt("night_end",420)))value=prefs.getInt("night_brightness",10)/100f;
+        value=DisplayMath.idleBrightness(value,SystemClock.elapsedRealtime()-lastInteraction,
+                !configuring&&prefs.getBoolean("oled",true)&&prefs.getBoolean("oled_dim",true));
         WindowManager.LayoutParams p = getWindow().getAttributes();
         if (Math.abs(p.screenBrightness - value) > .001f) { p.screenBrightness = value; getWindow().setAttributes(p); }
     }
@@ -191,44 +199,33 @@ public final class MainActivity extends Activity {
 
     void settings() {
         if (configuring || isFinishing()) return;
-        configuring=true; stop();
-        final LinearLayout form=new LinearLayout(this); form.setOrientation(LinearLayout.VERTICAL);
+        configuring=true; wakeDisplay(); stop();
+        final SettingsUi.FormDialog builder=new SettingsUi.FormDialog(this);
+        final android.content.Context controls=builder.context;
+        final LinearLayout form=new LinearLayout(controls); form.setOrientation(LinearLayout.VERTICAL);
         int padding=(int)(16*getResources().getDisplayMetrics().density); form.setPadding(padding, 0, padding, 0);
         final EditText server=field(form, "NAS 服务地址（包含 http:// 和端口）", prefs.getString("server", ""), false);
         server.setHint("http://192.168.x.x:18199");
         final EditText token=field(form, "只读 Token", prefs.getString("token", ""), true);
-        TextView caption=new TextView(this); caption.setText("网络曲线刷新频率"); form.addView(caption);
-        final Spinner speed=new Spinner(this);
-        ArrayAdapter<String> adapter=new ArrayAdapter<String>(this, android.R.layout.simple_spinner_item, new String[]{"均衡 · 500ms（推荐）", "流畅 · 200ms"});
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item); speed.setAdapter(adapter);
-        speed.setSelection(prefs.getInt("interval", 500)==200?1:0); form.addView(speed);
-        final TextView light=new TextView(this); form.addView(light);
-        final SeekBar brightness=new SeekBar(this); brightness.setMax(90); brightness.setProgress(prefs.getInt("brightness", 30)-10);
-        light.setText("亮度 " + (brightness.getProgress()+10) + "%");
-        brightness.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            public void onProgressChanged(SeekBar b,int progress,boolean user){light.setText("亮度 " + (progress+10) + "%");}
-            public void onStartTrackingTouch(SeekBar b){} public void onStopTrackingTouch(SeekBar b){}
-        }); form.addView(brightness);
-        final CheckBox night=new CheckBox(this); night.setText("启用定时夜间模式（上海时区）"); night.setChecked(prefs.getBoolean("night", true)); form.addView(night);
+        final SettingsUi.Rate speed=new SettingsUi.Rate(form,prefs.getInt("interval",500));
+        final SettingsUi.Level brightness=new SettingsUi.Level(form,"亮度",prefs.getInt("brightness",30),10,100);
+        final CheckBox night=SettingsUi.check(controls); night.setText("启用定时夜间模式（上海时区）"); night.setChecked(prefs.getBoolean("night", true)); form.addView(night);
         final int[] nightTimes={prefs.getInt("night_start",1380),prefs.getInt("night_end",420)};
         timeButton(form,"开启时间",nightTimes,0);timeButton(form,"关闭时间",nightTimes,1);
-        final TextView nightCaption=new TextView(this);form.addView(nightCaption);
-        final SeekBar nightBrightness=new SeekBar(this);nightBrightness.setMax(99);nightBrightness.setProgress(prefs.getInt("night_brightness",10)-1);
-        nightCaption.setText("夜间亮度 "+(nightBrightness.getProgress()+1)+"%");
-        nightBrightness.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
-            public void onProgressChanged(SeekBar b,int progress,boolean user){nightCaption.setText("夜间亮度 "+(progress+1)+"%");}
-            public void onStartTrackingTouch(SeekBar b){} public void onStopTrackingTouch(SeekBar b){}
-        });form.addView(nightBrightness);
-        TextView note=new TextView(this);note.setText("支持跨午夜；开启和关闭时间相同表示全天夜间模式。结束后恢复日间亮度。");form.addView(note);
-        final CheckBox expand=new CheckBox(this);expand.setText("大屏空间充足时展开四页辅助信息");expand.setChecked(prefs.getBoolean("expand",true));form.addView(expand);
-        if(Build.VERSION.SDK_INT>=37){Button permission=new Button(this);permission.setText("局域网访问权限");form.addView(permission);permission.setOnClickListener(new android.view.View.OnClickListener(){public void onClick(android.view.View v){
+        final SettingsUi.Level nightBrightness=new SettingsUi.Level(form,"夜间亮度",prefs.getInt("night_brightness",10),1,100);
+        TextView note=new TextView(controls);note.setText("支持跨午夜；开启和关闭时间相同表示全天夜间模式。结束后恢复日间亮度。");form.addView(note);
+        final CheckBox oled=SettingsUi.check(controls);oled.setText("OLED 保护：纯黑背景、柔和白字、画面微移");oled.setChecked(prefs.getBoolean("oled",true));form.addView(oled);
+        final CheckBox oledDim=SettingsUi.check(controls);oledDim.setText("OLED 保护时，闲置 5 分钟后逐步降亮度");oledDim.setChecked(prefs.getBoolean("oled_dim",true));form.addView(oledDim);
+        TextView oledNote=new TextView(controls);oledNote.setText("每分钟微移，范围 ±4 个屏幕像素；闲置降亮度在 1 分钟内降至当前日间/夜间亮度的 60%，触摸恢复。数据持续更新。只能降低烧屏风险，不能修复或保证避免烧屏。");form.addView(oledNote);
+        final CheckBox expand=SettingsUi.check(controls);expand.setText("大屏空间充足时展开四页辅助信息");expand.setChecked(prefs.getBoolean("expand",true));form.addView(expand);
+        if(Build.VERSION.SDK_INT>=37){Button permission=SettingsUi.button(controls);permission.setText("局域网访问权限");form.addView(permission);permission.setOnClickListener(new android.view.View.OnClickListener(){public void onClick(android.view.View v){
             android.content.Intent intent=new android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,android.net.Uri.parse("package:"+getPackageName()));startActivity(intent);
         }});}
-        ScrollView scroll=new ScrollView(this); scroll.addView(form);
-        final AlertDialog dialog=new AlertDialog.Builder(this).setTitle("NAS 显示终端设置").setView(scroll).setPositiveButton("保存并连接", null).setNegativeButton("取消", null).create();
-        dialog.setOnDismissListener(new DialogInterface.OnDismissListener(){public void onDismiss(DialogInterface d){configuring=false;start();}});
+        ScrollView scroll=new ScrollView(controls); scroll.addView(form);
+        final android.app.Dialog dialog=builder.create(scroll);
+        dialog.setOnDismissListener(new DialogInterface.OnDismissListener(){public void onDismiss(DialogInterface d){configuring=false;wakeDisplay();PlatformUi.fullscreen(MainActivity.this);start();}});
         dialog.show();
-        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(new android.view.View.OnClickListener(){public void onClick(android.view.View v){
+        builder.saveButton().setOnClickListener(new android.view.View.OnClickListener(){public void onClick(android.view.View v){
             String address=server.getText().toString().trim(), secret=token.getText().toString().trim();
             try {
                 URL u=new URL(address);
@@ -236,23 +233,21 @@ public final class MainActivity extends Activity {
             } catch (Exception e) {server.setError("请输入有效的 HTTP / HTTPS 服务根地址");return;}
             if (secret.length()<1 || secret.length()>512 || !secret.matches("[!-~]+")) {token.setError("请输入有效的只读 Token");return;}
             while(address.endsWith("/"))address=address.substring(0,address.length()-1);
-            prefs.edit().putString("server",address).putString("token",secret).putInt("interval",speed.getSelectedItemPosition()==1?200:500).putInt("brightness",brightness.getProgress()+10).putBoolean("night",night.isChecked()).putInt("night_start",nightTimes[0]).putInt("night_end",nightTimes[1]).putInt("night_brightness",nightBrightness.getProgress()+1).putBoolean("expand",expand.isChecked()).commit();
-            display.reset();display.relayout();applyBrightness();dialog.dismiss();
+            prefs.edit().putString("server",address).putString("token",secret).putInt("interval",speed.position()==1?200:500).putInt("brightness",brightness.value()).putBoolean("night",night.isChecked()).putInt("night_start",nightTimes[0]).putInt("night_end",nightTimes[1]).putInt("night_brightness",nightBrightness.value()).putBoolean("expand",expand.isChecked()).commit();
+            prefs.edit().putBoolean("oled",oled.isChecked()).putBoolean("oled_dim",oledDim.isChecked()).commit();
+            wakeDisplay();display.reset();display.relayout();applyBrightness();dialog.dismiss();
         }});
     }
     void timeButton(LinearLayout form,final String title,final int[] times,final int index){
-        final Button button=new Button(this);form.addView(button);
+        final Button button=SettingsUi.button(form.getContext());form.addView(button);
         button.setText(String.format(java.util.Locale.US,"%s  %02d:%02d",title,times[index]/60,times[index]%60));
         button.setOnClickListener(new android.view.View.OnClickListener(){public void onClick(android.view.View v){
-            new TimePickerDialog(MainActivity.this,new TimePickerDialog.OnTimeSetListener(){public void onTimeSet(android.widget.TimePicker picker,int hour,int minute){
-                times[index]=hour*60+minute;button.setText(String.format(java.util.Locale.US,"%s  %02d:%02d",title,hour,minute));
-            }},times[index]/60,times[index]%60,true).show();
+            SettingsUi.time(MainActivity.this,button,title,times,index);
         }});
     }
     EditText field(LinearLayout form,String label,String value,boolean secret) {
-        TextView title=new TextView(this);title.setText(label);form.addView(title);
-        EditText input=new EditText(this);input.setSingleLine(true);input.setContentDescription(label);
+        EditText input=SettingsUi.field(form,label,secret);input.setSingleLine(true);input.setContentDescription(label);
         input.setInputType(InputType.TYPE_CLASS_TEXT|(secret?InputType.TYPE_TEXT_VARIATION_PASSWORD:InputType.TYPE_TEXT_VARIATION_URI));
-        input.setText(value);form.addView(input);return input;
+        input.setText(value);return input;
     }
 }

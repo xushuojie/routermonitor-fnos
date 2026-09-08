@@ -1,10 +1,10 @@
 # Android NAS 显示终端
 
-原生 Java + Canvas，一个 APK 面向 Android 4.3（API 18）至 Android 17（API 37）的手机和平板。无 WebView、第三方运行库、Google Play 服务或原生 `.so` 依赖。最低系统版本不代表所有厂商机型均已验收；实测范围见下文。
+原生 Java + Canvas，一个 APK 面向 Android 4.3（API 18）至 Android 17（API 37）的手机和平板。无 WebView、Google Play 服务或原生 `.so` 依赖。设置页使用 AndroidX 和 Google Material Components。最低系统版本不代表所有厂商机型均已验收；实测范围见下文。
 
 ## 下载与连接
 
-从 [v1.1.0 Release](https://github.com/xushuojie/routermonitor-fnos/releases/tag/v1.1.0) 下载 `routermonitor-fnos-v1.1.0-android.apk`，覆盖安装可保留原有地址、Token 和亮度设置。
+当前下载：[1.1.5-adaptive-test APK](../downloads/routermonitor-android-1.1.5-adaptive-test.apk)。包名 `io.github.routermonitor.fnos.layouttest`，使用本地测试签名，可覆盖同签名的 1.1.1–1.1.4 测试版并保留设置；与旧正式版并存，首次安装需重新配置连接。签名密钥不随源码公开。
 
 打开 **NAS Monitor**，填写服务根地址（例如 `http://192.168.x.x:18199`）和 NAS 网页提供的**只读 Token**。Android 与 ESP8266 共用 Docker 的 v2 接口，容量和流量统计由服务端提供。
 
@@ -15,7 +15,20 @@
 
 ## 多尺寸 UI
 
-按实际可用窗口、屏幕密度和系统字体比例计算布局，不按机型建立分辨率列表。背景铺满，内容避开系统栏、挖孔和手势区域；字体放大或窗口过小时可纵向滑动查看全部模块。
+1.1.5 按 Android 版本明确选择设置风格，替代 1.1.4 的 DeviceDefault：
+
+| 系统 | 设置风格 |
+| --- | --- |
+| Android 4.3–4.4 / API 18–20 | 系统 Holo |
+| Android 5–11 / API 21–30 | 系统标准 Material |
+| Android 12 及以上 / API 31+ | 随应用打包的 Google Material 3 |
+
+输入框、滑块、选择框、复选框、按钮、对话框和时间选择器使用同一代设计。打开设置时跟随系统深浅色。Material 3 是应用组件库，不是每个 Android 大版本的系统设置副本，也不依赖厂商 DeviceDefault。
+为保留 Android 4.3 安装能力固定 Material Components 1.6.1（支持 API 14 起）；仅在 API 31+ 使用 Material 3 界面。AndroidX FragmentActivity 用于现代时间选择器，网络接口、偏好键名、全屏和 OLED 逻辑保留。
+
+按实际可用窗口、屏幕密度和系统字体比例计算布局，不按机型建立分辨率列表。采用沉浸式全屏，背景和内容允许进入摄像头挖孔区域，不为状态栏、导航栏和手势区域预留空白；从屏幕边缘滑动可临时显示系统栏。桌面窗口模式仍保留系统标题栏区域。字体放大或窗口过小时可纵向滑动查看全部模块。
+
+顶部标题和设置入口固定在画面顶部，只有下方数据模块滚动。普通字体下，横屏可用高度比完整布局少不超过 15% 时，会轻微等比缩小以完整显示；更短的分屏或放大字体继续滚动，不强制缩小可读文字。窗口高度、宽度、密度和边距变化都会重新计算布局；Android 9/10 允许使用短边挖孔区域，Android 11 及以上允许使用所有边的挖孔区域。
 
 - **横屏双列**：足够宽时，左侧网速→折线图→硬盘读写，右侧时间→轮播。功率、CPU、GPU、内存横排。原 960×540 手机保持这一信息关系。
 - **竖屏单列**：时间→网速/曲线/硬盘→轮播→底栏。底栏通常两列，特别窄的窗口改为单列；网速和硬盘两组也会在窄窗口上下排列。
@@ -35,6 +48,16 @@ Android 17 模拟器实际截图（固定示例数据，用于检查大数字和
 ![Android 平板横屏布局，示例数据](../images/android-tablet.png)
 
 ## 夜间模式
+
+### OLED 保护（1.1.3）
+
+设置页新增两个默认开启的选项：OLED 保护和闲置降亮度。关闭 OLED 保护可恢复原配色和固定位置；关闭闲置降亮度可保留黑底与微移。
+
+- 保护开启时使用纯黑背景及卡片底色，将主要白字调柔和。
+- 整个画面（含标题、时间、图表及底部指标）每分钟移动一次，在水平/垂直 ±4 个物理像素内遍历 81 个位置。布局为移动预留总共 8 像素空间，防止边缘裁切；触摸坐标使用相同偏移。不会恢复摄像头避让留白。
+- 无操作 5 分钟后，用 1 分钟逐步降至当前日间或夜间亮度的 60%，最低 1%。触摸、键盘操作、无障碍操作、打开设置或返回应用恢复当前时段亮度。设置对话框期间不执行闲置降亮度。
+- 数据刷新不会重置闲置计时；降亮度时采样继续。复用已有每秒时钟刷新，不增加常驻动画或额外轮询。
+- 这些措施仅降低 OLED 长期显示风险，不能修复或保证避免烧屏。尚未在小米实机进行长期老化测试。
 
 设置可独立调整：
 
@@ -63,18 +86,20 @@ Android 17 模拟器实际截图（固定示例数据，用于检查大数字和
 
 ## 构建与验证
 
-需要支持 `javac --release 8` 的 JDK、Android SDK `platforms;android-37.0` 和 `build-tools;35.0.1`。编译 SDK 37、target 37、min 18；新平台 API 按版本隔离调用。
+使用 JDK 17–21、Gradle Wrapper 8.11.1、AGP 8.9.1、Android SDK `platforms;android-36-ext19` 与 `build-tools;35.0.1`。首次构建需联网下载 Maven 依赖。compile SDK 36-ext19，target 37，min 18。
 
 ```sh
 export JAVA_HOME=/path/to/jdk
 export ANDROID_HOME=/path/to/android-sdk
 python3 android/build.py
-adb install -r android/build/nas-monitor-android.apk
 ```
 
-可用 `ANDROID_PLATFORM` 和 `ANDROID_BUILD_TOOLS` 指定 SDK 安装目录中的版本。使用官方 javac、D8、aapt、zipalign、apksigner，无需 Gradle。默认使用已有的 `~/.android/debug.keystore`；正式发布通过 `ANDROID_KEYSTORE`、`ANDROID_KEY_ALIAS`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD` 设置私有签名。更新须保持同一签名；保留 v1 签名供旧机安装，并验证 v2/v3。签名文件和构建目录不入库。
+构建会运行 Robolectric 控件测试再生成 release 包。正式签名通过 `ANDROID_KEYSTORE`、`ANDROID_KEY_ALIAS`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD` 指定；必须保持原发行签名才能覆盖正式版。
+也可在 android/ 中运行 `./gradlew assembleDebug testDebugUnitTest`；默认 Gradle debug 签名与本次交付的本地测试签名不同，勿用它覆盖现有测试版。本次交付另行使用原测试密钥签名。
 
-构建自动运行普通 Java 自检：数值单位、纵轴、历史序号与容量、夜间跨午夜/边界/全天、多尺寸布局边界和模块不重叠。
+普通 Java 自检文件保留，可单独编译运行；原先不依赖 Maven 的 javac/aapt 单文件构建方式不再适用于 1.1.5。
+
+普通 Java 自检覆盖：数值单位、纵轴、历史序号与容量、夜间跨午夜/边界/全天、多尺寸布局边界和模块不重叠。
 
 新版模拟器可用固定示例数据复查大数字和权限流程：
 
@@ -86,10 +111,15 @@ python3 android/test/serve_fixture.py
 
 ## 实测范围
 
+1.1.5：已有 Robolectric 控件报告显示 13 项通过，普通 Java 自检已在此前构建时运行。下列正式版设备记录主要来自 1.1.0，不能视为 1.1.5 的实机验收；本次 Windows 同步未重跑 Android 构建。
+
+
 - Android 4.3 OPPO R2017：同一发布签名覆盖安装，原 NAS 地址和 Token 保留，真实数据持续更新；横屏布局、CPU 温度、单位对齐已检查。
 - Android 17/API 37 ARM64 模拟器：发布 APK 正常安装；局域网权限拒绝提示和授权恢复、HTTP 示例数据连接已检查。
 - API 37 模拟器检查了 1080×2400 手机、1920×1200 横屏平板、1200×1920 竖屏平板，以及 200% 字体下的重排与滚动。切换尺寸和字体后 PID 保持不变，采样继续。
 - 通过设置界面将夜间时段改为 22:01–08:00、亮度改为 23%，重启后读取配置确认保存；系统窗口属性确认实际应用亮度为 0.23。跨午夜、精确起止边界、同日起止及全天模式由 Java 自检覆盖。
 - 未进行所有厂商 ROM、中间各 Android 版本实机或 24 小时压力测试。
+- 1.1.1 修复针对小米 15 Ultra 横屏顶部裁切反馈：补充短横屏、扣除安全边距的高密度窗口、字体放大、极短分屏及高度变化的 Java 回归用例。尚未在该机型实机复测。
+- 1.1.2 根据后续反馈改为忽略挖孔边距的沉浸式全屏；已完成编译和布局自检，仍需小米 15 Ultra 实机确认。
 
 历史版本 1.0.x 在同一旧手机中，两档各观察约 62 秒：500ms 模式 PSS 约 14–20MiB，200ms 约 24–28MiB；离开应用后 10 秒网络计数不变，断网后恢复通过。上述历史数据不是新版或其他机型的性能承诺，手机功耗也不能沿用 ESP8266 的约 0.55W 测量值。

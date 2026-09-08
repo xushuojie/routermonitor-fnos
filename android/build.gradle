@@ -1,0 +1,33 @@
+plugins { id 'com.android.application' version '8.9.1' }
+
+android {
+    namespace 'io.github.routermonitor.fnos'
+    compileSdk 36
+    compileSdkExtension 19
+    buildToolsVersion '35.0.1'
+    defaultConfig {
+        applicationId 'io.github.routermonitor.fnos'
+        minSdk 18
+        targetSdk 37
+        versionCode 10
+        versionName '1.1.5'
+        manifestPlaceholders = [appLabel:'NAS Monitor']
+    }
+    sourceSets { main { manifest.srcFile 'AndroidManifest.xml'; java.srcDirs = ['src']; res.srcDirs = ['res'] } }
+    sourceSets { test { java.srcDirs = ['ui-test'] } }
+    testOptions { unitTests.includeAndroidResources = true }
+    testOptions.unitTests.all {
+        if (System.getenv('ROBOLECTRIC_DEPENDENCY_DIR')) systemProperty 'robolectric.dependency.dir', System.getenv('ROBOLECTRIC_DEPENDENCY_DIR')
+    }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_1_8; targetCompatibility JavaVersion.VERSION_1_8 }
+    buildTypes {
+        debug { applicationIdSuffix '.layouttest'; versionNameSuffix '-adaptive-test'; manifestPlaceholders = [appLabel:'NAS Monitor 布局测试'] }
+        release { minifyEnabled false }
+    }
+}
+dependencies {
+    // Last generation with API 14 support; keeps our Android 4.3 devices installable.
+    implementation 'com.google.android.material:material:1.6.1'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.14.1'
+}

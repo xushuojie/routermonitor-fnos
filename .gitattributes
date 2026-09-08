@@ -1,0 +1,8 @@
+* text=auto
+fnos/** text eol=lf
+android/gradlew text eol=lf
+*.fpk binary
+*.apk binary
+*.jar binary
+*.png binary
+*.PNG binary

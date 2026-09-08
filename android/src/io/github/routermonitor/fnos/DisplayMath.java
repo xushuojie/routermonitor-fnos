@@ -4,6 +4,15 @@ import java.util.Locale;
 
 /** Formatting and bounded history shared by the renderer and the desktop check. */
 final class DisplayMath {
+    // An 81-position serpentine path: integer physical pixels, no per-frame animation.
+    static int oledShift(long elapsed, boolean vertical) {
+        int step=(int)((Math.max(0,elapsed)/60000)%81),row=step/9,col=step%9;
+        return vertical?row-4:(row%2==0?col:8-col)-4;
+    }
+    static float idleBrightness(float base,long idle,boolean enabled) {
+        float progress=enabled?Math.max(0,Math.min(1,(idle-300000)/60000f)):0;
+        return Math.max(.01f,base*(1-.4f*progress));
+    }
     static boolean valid(double v) { return !Double.isNaN(v) && !Double.isInfinite(v) && v >= 0; }
     static String[] amount(double bytes, boolean speed) {
         if (!valid(bytes)) return new String[]{"—", speed ? "B/s" : "B"};

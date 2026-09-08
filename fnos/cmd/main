@@ -1,0 +1,13 @@
+#!/bin/sh
+case "$1" in
+start)
+    python3 "$TRIM_APPDEST/docker/host_collector.py" start "$TRIM_APPDEST/docker/host-metrics"
+    exit $? ;;
+stop)
+    python3 "$TRIM_APPDEST/docker/host_collector.py" stop "$TRIM_APPDEST/docker/host-metrics"
+    exit $? ;;
+status)
+    state=$(docker inspect --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' routermonitor-fnos 2>/dev/null)
+    case "$state" in 'running healthy') exit 0 ;; *) exit 3 ;; esac ;;
+*) exit 1 ;;
+esac

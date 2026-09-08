@@ -8,22 +8,25 @@
 
 [快速部署](#1-部署-nas-服务) · [网页控制台](#打开-nas-网页控制台) · [屏幕与烧录](#2-编译和烧录固件) · [服务端完整说明](nas-docker/README.md)
 
-## 下载发行版
+## 最新下载与说明
 
-[GitHub Releases](https://github.com/xushuojie/routermonitor-fnos/releases/latest) 提供 Android APK、两种屏幕的预编译固件、Docker 服务端部署包及 `SHA256SUMS.txt` 校验文件。
+本次同步：飞牛 **1.3.0-5**，Android **1.1.5-adaptive-test**。
 
-当前版本：[v1.1.0 · Android 多屏适配与夜间设置](https://github.com/xushuojie/routermonitor-fnos/releases/tag/v1.1.0)。Android APK 新增多尺寸布局和定时夜间亮度；ESP8266 与 Docker 没有变更，发行附件沿用 v1.0.2 的已发布文件及原文件名，无需为本次 Android 更新重新刷屏或部署 NAS。
+| 文件 | 下载 | 说明 |
+| --- | --- | --- |
+| 飞牛 FPK | [routermonitor-fnos-1.3.0-5-amd64.fpk](downloads/routermonitor-fnos-1.3.0-5-amd64.fpk) | x86-64 / amd64，含离线 Docker 镜像 |
+| Android APK | [routermonitor-android-1.1.5-adaptive-test.apk](downloads/routermonitor-android-1.1.5-adaptive-test.apk) | Android 4.3 起，独立测试包名及测试签名 |
+| 校验文件 | [SHA256SUMS.txt](downloads/SHA256SUMS.txt) | 两个安装包的 SHA-256 |
 
-从早期版本升级服务端时，请使用完整 Docker 部署包（包含新增的 `storage-discovery` 服务），保留已有数据目录和认证配置，按[服务端说明](nas-docker/README.md)迁移；只替换 `api.py` 无法启用容量自动发现。v1.0.2 对应屏幕固件包含加粗进度条。ILI9341 仅编译验证。
+**[完整安装与使用说明书](docs/使用说明书.md)** · [飞牛源码与打包](fnos/README.md) · [Android 功能与构建](android/README.md)
 
-- `android.apk`：Android 原生显示端，安装后填写 NAS 地址和只读 Token，覆盖安装保留设置。
-- `st7789.bin`：ST7789 240 × 240 小屏幕，对应默认 `nodemcuv2` 配置。
-- `ili9341.bin`：ILI9341 屏幕的 240 × 240 显示区域，对应 `nodemcuv2_ili9341`，仅编译验证。
-- `nas-docker.zip`：解压后进入 `nas-docker`，按部署说明配置 `.env` 并执行 `docker compose up -d --build`；这是部署源码包，不是预构建 Docker 镜像。
+下载文件时打开链接后点击 **Download raw file**。源码可从仓库 **Code → Download ZIP** 获取，或运行 `git clone https://github.com/xushuojie/routermonitor-fnos.git`。
 
-下载文件名带项目名和版本号。固件为写入 ESP8266 Flash 地址 `0x0` 的程序映像，不含 Wi-Fi、Token 或 LittleFS 配置；升级前请核对屏幕与接线，勿为更新程序而擦除整片 Flash。可用 `shasum -a 256 -c SHA256SUMS.txt` 校验同目录下的全部发行文件。
+Android 测试版包名为 `io.github.routermonitor.fnos.layouttest`，可与旧正式版并存；首次安装需重新填写 NAS 地址与 Token。同一签名的 1.1.1–1.1.4 布局测试版可覆盖升级。它不覆盖旧正式版，也不是重新签名的正式发行包。
 
-![NAS 网页控制台：实时数据概览](images/web-overview.png)
+飞牛版提供数据展示、硬件设置、自定义只读 Token、局域网地址提示及持久化数据卷。FPK 未在飞牛实机安装验收；Android 新版验证范围见模块说明。
+
+ESP8266 固件及旧 Docker 部署包仍可从 [历史 Releases](https://github.com/xushuojie/routermonitor-fnos/releases) 下载；本次未更新 ESP8266 固件。`nas-docker/` 保留独立 Docker 部署方式，最新 FPK 对应源码位于 `fnos/`。
 
 一台基于 ESP8266 和 240 × 240 彩屏的 NAS 桌面监控小电视。设备通过 HTTP 长连接每秒获取 NAS 展示状态，同时每 200 毫秒获取共享网络采样，显示网络与硬盘读写速率、CPU/GPU/内存占用、时间及四页轮播信息。
 
@@ -62,6 +65,9 @@
 ├─ include/TFT_eSPI_Setup.h  # 屏幕驱动与引脚
 ├─ src/                      # ESP8266 固件和字体资源
 ├─ android/                  # Android 手机/平板原生显示端
+├─ fnos/                     # 最新飞牛 FPK 服务端与打包源码
+├─ downloads/                # 最新 FPK、APK 与校验文件
+├─ docs/                     # 安装与使用说明书
 ├─ nas-docker/               # NAS API、网页控制台、Dockerfile、Compose
 ├─ platformio.ini            # PlatformIO 构建配置
 └─ images/                   # 项目图片

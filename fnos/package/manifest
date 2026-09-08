@@ -1,0 +1,14 @@
+appname               = routermonitor-fnos
+version               = 1.3.0-5
+display_name          = NAS Monitor
+desc                  = NAS 桌面监控服务：自动发现网卡和存储，支持安卓与 ESP8266。内含离线镜像。升级及卸载保留数据卷。
+platform              = x86
+source                = thirdparty
+maintainer            = xushuojie
+distributor           = xushuojie
+maintainer_url        = https://github.com/xushuojie/routermonitor-fnos
+desktop_uidir         = ui
+desktop_applaunchname = routermonitor-fnos.main
+ctl_stop              = true
+checkport             = false
+checksum              = 49a73a99880556ac651bb781f8d5b98d

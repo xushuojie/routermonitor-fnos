@@ -1,0 +1,11 @@
+[
+  {
+    "stepTitle": "保留监控数据",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "卸载只移除应用。历史、密码和 Token 保留在 routermonitor-fnos-data 数据卷；重新安装会继续使用。"
+      }
+    ]
+  }
+]

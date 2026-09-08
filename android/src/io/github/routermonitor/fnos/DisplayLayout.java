@@ -11,9 +11,19 @@ final class DisplayLayout {
     final Box network,clock;
     final Box[] auxiliary,metrics=new Box[4];
     final boolean wide,expanded;
-    final float width,contentHeight;
+    static final float HEADER_HEIGHT=64;
+    final float width,height,contentHeight;
+    /** Fit a small landscape height deficit without shrinking accessibility text. */
+    static float fittedUnit(float pixelWidth,float pixelHeight,float unit,float fontScale,boolean expand){
+        DisplayLayout natural=new DisplayLayout(pixelWidth/unit,pixelHeight/unit,expand);
+        float ratio=(pixelHeight/unit)/natural.contentHeight;
+        return fontScale<=1.05f&&natural.wide&&ratio>=.85f&&ratio<1?unit*ratio:unit;
+    }
+    static float clampScroll(float scroll,float contentHeight,float viewportHeight){
+        return Math.max(0,Math.min(scroll,Math.max(0,contentHeight-viewportHeight)));
+    }
     DisplayLayout(float w,float h,boolean expand) {
-        width=w;float margin=24,gap=20,inner=Math.max(1,w-48),top=64;
+        width=w;height=h;float margin=24,gap=20,inner=Math.max(1,w-48),top=HEADER_HEIGHT;
         wide=w>=900&&w>h;
         expanded=expand&&((wide&&w>=1260&&h>=1000)||(!wide&&w>=900&&h>=1300));
         int columns=w>=780?4:w>=480?2:1;

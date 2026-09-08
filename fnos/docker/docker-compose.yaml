@@ -1,0 +1,52 @@
+name: routermonitor-fnos
+
+services:
+  nas-status:
+    image: routermonitor-fnos:1.3.0-5
+    pull_policy: never
+    container_name: routermonitor-fnos
+    restart: unless-stopped
+    environment:
+      PROC_ROOT: /host
+      SYS_ROOT: /host
+      DEBUGFS_ROOT: /host/debug
+      SMART_ROOT: /host/smartmontools
+      NAS_STATUS_IFACE: ${NAS_STATUS_IFACE:-physical}
+      NAS_STATUS_STORAGE_PATHS: ${NAS_STATUS_STORAGE_PATHS:-}
+      NAS_STATUS_HISTORY_DB: /data/traffic.sqlite3
+      NAS_STATUS_SMART_MAX_AGE_SECONDS: ${NAS_STATUS_SMART_MAX_AGE_SECONDS:-7200}
+      NAS_STATUS_TOKEN: ${NAS_STATUS_TOKEN:-}
+      NAS_STATUS_ADMIN_PASSWORD: ${NAS_STATUS_ADMIN_PASSWORD:-}
+    network_mode: host
+    command: ["--port", "${wizard_port:-18199}"]
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /sys/kernel/debug:/host/debug:ro
+      - /var/lib/smartmontools:/host/smartmontools:ro
+      - /run/nut:/host/nut:ro
+      - ./host-metrics:/host/monitor:ro
+      # Required for dynamically mounted fnOS data volumes; metadata/statvfs only.
+      - /:/hostfs:ro,rslave
+      - traffic-history:/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Used only to join the discovered NUT socket group; service.py drops it.
+    cap_add: [SETGID]
+    read_only: true
+    stop_grace_period: 15s
+    healthcheck:
+      test: ["CMD", "python3", "/app/healthcheck.py"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    tmpfs:
+      - /tmp:size=1m
+
+volumes:
+  traffic-history:
+    external: true
+    name: routermonitor-fnos-data

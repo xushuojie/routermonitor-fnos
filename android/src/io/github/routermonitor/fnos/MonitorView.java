@@ -40,16 +40,28 @@ final class MonitorView extends View {
     boolean longPressed,dragged;
     float scroll,lastTouchY;
     int insetLeft,insetTop,insetRight,insetBottom;
+    float layoutPixelWidth,layoutPixelHeight,layoutBaseUnit;
+    boolean layoutExpand,oled;
     DisplayLayout layout;
     void relayout(){layout=null;scroll=0;invalidate();}
-    void insets(int l,int t,int r,int b){insetLeft=l;insetTop=t;insetRight=r;insetBottom=b;relayout();}
+    void insets(int l,int t,int r,int b){if(l==insetLeft&&t==insetTop&&r==insetRight&&b==insetBottom)return;insetLeft=l;insetTop=t;insetRight=r;insetBottom=b;relayout();}
     @Override protected void onSizeChanged(int w,int h,int oldw,int oldh){relayout();}
     void ensureLayout(){
-        float unit=getResources().getDisplayMetrics().density*getResources().getConfiguration().fontScale/1.5f;
-        float w=Math.max(1,getWidth()-insetLeft-insetRight)/unit,h=Math.max(1,getHeight()-insetTop-insetBottom)/unit;
-        if(layout==null||unit!=scale||layout.width!=w){scale=unit;layout=new DisplayLayout(w,h,activity.prefs.getBoolean("expand",true));}
-        offsetX=insetLeft;offsetY=insetTop;
-        scroll=Math.max(0,Math.min(scroll,Math.max(0,layout.contentHeight-h)));
+        float fontScale=getResources().getConfiguration().fontScale;
+        float unit=getResources().getDisplayMetrics().density*fontScale/1.5f;
+        oled=activity.prefs.getBoolean("oled",true);
+        float margin=oled?4:0;
+        float pixelsW=Math.max(1,getWidth()-insetLeft-insetRight-2*margin),pixelsH=Math.max(1,getHeight()-insetTop-insetBottom-2*margin);
+        boolean expand=activity.prefs.getBoolean("expand",true);
+        if(layout==null||layoutBaseUnit!=unit||layoutPixelWidth!=pixelsW||layoutPixelHeight!=pixelsH||layoutExpand!=expand){
+            layoutBaseUnit=unit;layoutPixelWidth=pixelsW;layoutPixelHeight=pixelsH;layoutExpand=expand;
+            scale=DisplayLayout.fittedUnit(pixelsW,pixelsH,unit,fontScale,expand);
+            layout=new DisplayLayout(pixelsW/scale,pixelsH/scale,expand);
+        }
+        long elapsed=SystemClock.elapsedRealtime();
+        offsetX=insetLeft+margin+(oled?DisplayMath.oledShift(elapsed,false):0);
+        offsetY=insetTop+margin+(oled?DisplayMath.oledShift(elapsed,true):0);
+        scroll=DisplayLayout.clampScroll(scroll,layout.contentHeight,layout.height);
     }
     float fitted(float preferred,String reference,float width){paint.setTextSize(preferred);return Math.min(preferred,preferred*Math.max(1,width)/Math.max(1,paint.measureText(reference)));}
     void label(Canvas c,String value,float x,float y,float size,int color,float width,boolean alignRight){
@@ -108,23 +120,25 @@ final class MonitorView extends View {
     String value(double n,String format) {return DisplayMath.valid(n)?String.format(Locale.US,format,n):"—";}
     String amount(double n){String[] parts=DisplayMath.amount(n,false);return parts[0]+(DisplayMath.valid(n)?" "+parts[1]:"");}
     void text(Canvas c,String s,float x,float baseline,float size,int color) {
-        paint.setStyle(Paint.Style.FILL);paint.setColor(color);paint.setTextSize(size);c.drawText(s,x,baseline,paint);
+        paint.setStyle(Paint.Style.FILL);paint.setColor(oled&&color==TEXT?Color.rgb(210,218,222):color);paint.setTextSize(size);c.drawText(s,x,baseline,paint);
     }
     void right(Canvas c,String s,float x,float baseline,float size,int color) {paint.setTextSize(size);text(c,s,x-paint.measureText(s),baseline,size,color);}
     void line(Canvas c,float x,float y,float x2,float y2,int color,float width){paint.setColor(color);paint.setStrokeWidth(width);c.drawLine(x,y,x2,y2,paint);}
-    void panel(Canvas c,float x,float y,float width,float height) {paint.setStyle(Paint.Style.FILL);paint.setColor(PANEL);rect.set(x,y,x+width,y+height);c.drawRoundRect(rect,12,12,paint);}
+    void panel(Canvas c,float x,float y,float width,float height) {paint.setStyle(Paint.Style.FILL);paint.setColor(oled?Color.BLACK:PANEL);rect.set(x,y,x+width,y+height);c.drawRoundRect(rect,12,12,paint);}
 
     @Override protected void onDraw(Canvas c) {
         long began=System.nanoTime(),now=SystemClock.elapsedRealtime();
-        c.drawColor(BG);ensureLayout();
+        ensureLayout();c.drawColor(oled?Color.BLACK:BG);
         c.save();c.clipRect(insetLeft,insetTop,getWidth()-insetRight,getHeight()-insetBottom);
-        c.translate(offsetX,offsetY);c.scale(scale,scale);c.translate(0,-scroll);
+        c.translate(offsetX,offsetY);c.scale(scale,scale);
         float w=layout.width;
         label(c,"FNOS / 桌面监控",24,35,18,MUTED,w>=780?170:w-60-Math.min(210,w*.42f),false);
         if(w>=780)label(c,"NAS · "+serverHost,210,35,16,MUTED,w-440,false);
         else label(c,"NAS · "+serverHost,24,57,16,MUTED,w-48,false);
         String connection=netFresh()&&statusFresh()&&netError.length()==0&&statusError.length()==0?"● 在线 · 设置":"● "+(netError.length()>0?netError:statusError.length()>0?statusError:"数据已过期");
         label(c,connection,w-24,35,18,connection.startsWith("● 在线")?GREEN:GOLD,Math.min(210,w*.42f),true);
+        // Header stays in the safe viewport; only the dashboard body scrolls.
+        c.save();c.clipRect(0,DisplayLayout.HEADER_HEIGHT,w,layout.height);c.translate(0,-scroll);
         DisplayLayout.Box n=layout.network;
         boolean stacked=n.w<360;float half=stacked?n.w:(n.w-20)/2;
         speed(c,n.x,n.y,half,"↑ 上传",netFresh()?tx:Double.NaN,UP);
@@ -156,7 +170,7 @@ final class MonitorView extends View {
         metricCard(c,layout.metrics[1],"CPU",metric("cpu","percent",false),"%",100,UP);
         metricCard(c,layout.metrics[2],"GPU",metric("gpu","utilization",false),"%",100,DOWN);
         metricCard(c,layout.metrics[3],"内存",metric("memory","percent",false),"%",100,GREEN);
-        c.restore();drawMaxUs=Math.max(drawMaxUs,(System.nanoTime()-began)/1000);
+        c.restore();c.restore();drawMaxUs=Math.max(drawMaxUs,(System.nanoTime()-began)/1000);
     }
     void speed(Canvas c,float x,float y,float width,String name,double n,int color) {
         String[] parts=DisplayMath.amount(n,true);
@@ -233,14 +247,14 @@ final class MonitorView extends View {
     }
     final Runnable hold=new Runnable(){public void run(){longPressed=true;activity.settings();}};
     @Override public boolean onTouchEvent(MotionEvent event) {
-        ensureLayout();float x=(event.getX()-offsetX)/scale,y=(event.getY()-offsetY)/scale+scroll;
-        if(event.getAction()==MotionEvent.ACTION_DOWN){touchX=x;touchY=y;lastTouchY=event.getY();longPressed=dragged=false;postDelayed(hold,650);return true;}
+        ensureLayout();float x=(event.getX()-offsetX)/scale,screenY=(event.getY()-offsetY)/scale,y=screenY+scroll;
+        if(event.getAction()==MotionEvent.ACTION_DOWN){touchX=x;touchY=screenY;lastTouchY=event.getY();longPressed=dragged=false;postDelayed(hold,650);return true;}
         if(event.getAction()==MotionEvent.ACTION_MOVE){
-            if(Math.abs(x-touchX)+Math.abs(y-touchY)>12){dragged=true;removeCallbacks(hold);}
+            if(Math.abs(x-touchX)+Math.abs(screenY-touchY)>12){dragged=true;removeCallbacks(hold);}
             if(dragged){scroll+=(lastTouchY-event.getY())/scale;ensureLayout();invalidate();}lastTouchY=event.getY();return true;
         }
         if(event.getAction()==MotionEvent.ACTION_CANCEL){removeCallbacks(hold);return true;}
-        if(event.getAction()==MotionEvent.ACTION_UP){removeCallbacks(hold);if(!longPressed&&!dragged){if(y<72&&x>layout.width-220)activity.settings();else if(!layout.expanded&&layout.auxiliary[0].contains(x,y))nextPage(SystemClock.elapsedRealtime());performClick();}return true;}
+        if(event.getAction()==MotionEvent.ACTION_UP){removeCallbacks(hold);if(!longPressed&&!dragged){if(screenY>=0&&screenY<DisplayLayout.HEADER_HEIGHT&&x>layout.width-220)activity.settings();else if(screenY>=DisplayLayout.HEADER_HEIGHT&&!layout.expanded&&layout.auxiliary[0].contains(x,y))nextPage(SystemClock.elapsedRealtime());performClick();}return true;}
         return true;
     }
     @Override public boolean performClick(){super.performClick();return true;}
@@ -256,6 +270,7 @@ final class MonitorView extends View {
         info.addAction(16);info.setScrollable(true);info.addAction(4096);info.addAction(8192);
     }
     @Override public boolean performAccessibilityAction(int action,android.os.Bundle args){
+        activity.wakeDisplay();
         if(action==16){activity.settings();return true;}
         if(action==4096||action==8192){scroll+=action==4096?240:-240;ensureLayout();invalidate();return true;}
         return super.performAccessibilityAction(action,args);

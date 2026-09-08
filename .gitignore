@@ -20,7 +20,12 @@ Thumbs.db
 test/
 ui-design/
 android/build/
+android/.gradle/
+android/local.properties
 !android/test/
 !android/test/**
 *.keystore
 *.jks
+
+dist/
+fnos/test-results.txt

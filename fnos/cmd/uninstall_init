@@ -1,0 +1,5 @@
+#!/bin/sh
+if [ -f "$TRIM_APPDEST/docker/host_collector.py" ]; then
+    python3 "$TRIM_APPDEST/docker/host_collector.py" stop "$TRIM_APPDEST/docker/host-metrics"
+fi
+exit 0
