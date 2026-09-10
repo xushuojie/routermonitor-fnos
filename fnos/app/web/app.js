@@ -86,19 +86,25 @@ function drawChart() {
   }
 }
 function clearOverview() {
+  renderPowerReadings(null);
+  text('power-label','功率不可用'); text('power-source','等待有效采样');
   for (const id of ['network-tx','network-rx','disk-read','disk-write']) transfer(id,null);
   for (const [id,unit] of [['power','W'],['cpu','%'],['gpu','%'],['memory','%']]) { metric(id,null,unit); $(id+'-bar').value=0; }
   for (const id of ['traffic-tx','traffic-rx','storage-used','storage-total','cpu-temp','disk-temp','uptime']) text(id,'—'); $('storage-bar').value=0;
 }
 function renderOverview() {
   const d = state.overview; $('offline-note').hidden = !!d.available; if (!d.available) { clearOverview(); return; }
+  renderPowerReadings(d.power?.sources);
+  const power = d.power || {...d.ups, scope:'ups_output', label:'UPS 输出功率'};
+  text('power-label', power.valid ? ({ups_output:'UPS 输出功率',platform:'平台功率',cpu_package:'CPU 封装功率'}[power.scope] || '功率') : '功率不可用');
   transfer('network-tx',d.net?.tx_speed); transfer('network-rx',d.net?.rx_speed);
   transfer('disk-read',d.disk_io.valid ? d.disk_io.read_speed : null); transfer('disk-write',d.disk_io.valid ? d.disk_io.write_speed : null);
   text('source-badge', d.sources.network.join(' + ') || '未选择接口'); $('source-badge').title=d.sources.network.join(' + '); text('disk-source',d.disk_io.devices || '未检测到物理磁盘');
-  for (const [id,value,unit] of [['power',d.ups.watts,'W'],['cpu',d.cpu.percent,'%'],['gpu',d.gpu.utilization,'%'],['memory',d.memory.percent,'%']]) { metric(id,value,unit,1); $(id+'-bar').value=finite(value)?value:0; }
-  const powerMaximum = finite(d.ups.watts) ? Math.max(35, Math.ceil(d.ups.watts / 10) * 10) : 35;
+  for (const [id,value,unit] of [['power',power.valid ? power.watts : null,'W'],['cpu',d.cpu.percent,'%'],['gpu',d.gpu.utilization,'%'],['memory',d.memory.percent,'%']]) { metric(id,value,unit,1); $(id+'-bar').value=finite(value)?value:0; }
+  const powerMaximum = finite(power.watts) ? Math.max(35, Math.ceil(power.watts / 10) * 10) : 35;
   $('power-bar').max = powerMaximum; $('power-bar').setAttribute('aria-label', `功率 0 到 ${powerMaximum} 瓦`);
-  text('power-source', d.ups.valid ? (d.ups.source === 'dc_voltage_current' ? '直流电压 × 电流 · 计算值' : 'UPS 有功功率') : (d.ups.reason || 'UPS 功率不可用'));
+  text('power-source', power.reason || (power.valid ? 'UPS 输出端功率，不一定等于 NAS 单机功率' : '无可读的功率传感器'));
+
   text('gpu-source',d.gpu.reason || (d.gpu.backend === 'unavailable' ? '当前硬件无可用采集方式' : d.gpu.backend === 'i915' ? 'Intel i915 · 渲染引擎' : d.gpu.backend));
   text('memory-detail',d.memory.valid?`${format(d.memory.used)} / ${format(d.memory.total)}`:'内存数据不可用');
   text('traffic-tx',d.traffic_24h.valid?format(d.traffic_24h.tx_bytes):'—'); text('traffic-rx',d.traffic_24h.valid?format(d.traffic_24h.rx_bytes):'—');
@@ -109,6 +115,22 @@ function renderOverview() {
   text('overview-age',`状态更新于 ${d.age.toFixed(1)} 秒前`);
   const rows=[['容量发现',d.storage.mode === 'auto' ? '自动发现本地存储卷' : '手动选择存储卷'],['CPU / 内存',d.sources.cpu+' / '+d.sources.memory],['GPU',d.sources.gpu === 'unavailable'?'未支持当前 GPU 采集方式':d.sources.gpu],['数据卷',d.sources.storage_paths.join('、')],['UPS',`${d.ups.source} · ${d.ups.valid?'有效':'不可用'}${d.ups.reason?' · '+d.ups.reason:''}${d.ups.age_seconds!=null?' · '+d.ups.age_seconds+'秒前':''}`],...d.temp.map(sensor=>[sensor.type,`${sensor.temp} °C`])];
   renderList('source-details',rows);
+}
+function renderPowerReadings(sources) {
+  const names = {ups_output:'UPS 输出功率',platform:'平台功率',cpu_package:'CPU 封装功率'};
+  for (const id of ['power-readings','power-overview-readings']) {
+    const fragment = document.createDocumentFragment();
+    for (const [scope,label] of Object.entries(names)) {
+      const value = sources?.[scope], valid = value?.valid === true && finite(value.watts);
+      const row=document.createElement('div'), heading=document.createElement('div'), title=document.createElement('strong'), reading=document.createElement('strong'), reason=document.createElement('p');
+      row.className='power-reading'; row.dataset.scope=scope; heading.className='volume-heading'; title.textContent=label;
+      reading.textContent=valid ? value.watts.toLocaleString('en-US',{maximumFractionDigits:1})+' W' : '不可用';
+      reading.className=valid?'power-reading-value':'muted'; reason.className='muted small-text';
+      reason.textContent=value?.reason || '等待该来源的有效读数；设备可能未提供传感器';
+      heading.append(title,reading);row.append(heading,reason);fragment.append(row);
+    }
+    $(id).replaceChildren(fragment);
+  }
 }
 function renderList(id, rows) { const fragment=document.createDocumentFragment(); for(const [name,value] of rows){const div=document.createElement('div'), label=document.createElement('span'), content=document.createElement('strong'); label.textContent=name;content.textContent=value??'—';div.append(label,content);fragment.append(div);} $(id).replaceChildren(fragment); }
 function renderDl(id, rows) { const fragment=document.createDocumentFragment(); for(const [name,value] of rows){const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=name;dd.textContent=value??'—';fragment.append(dt,dd);} $(id).replaceChildren(fragment); }
@@ -139,7 +161,7 @@ function readHardwareForm() {
   const manual = $('storage-mode').value === 'selected';
   const paths = manual ? [...$('storage-choices').querySelectorAll('input:checked')].map(input => input.value) : [...state.hardwareDraft.storage_paths];
   if (manual) paths.push(...$('storage-custom').value.split(/\r?\n/).map(path => path.trim()).filter(Boolean));
-  state.hardwareDraft = {...state.hardwareDraft, storage_mode: $('storage-mode').value, storage_paths: [...new Set(paths)], cpu_sensor: $('cpu-sensor').value, disk_sensor: $('disk-sensor').value, gpu: $('gpu-select').value, ups_mode: $('ups-mode').value, ups_socket: $('ups-socket').value.trim(), ups_host: $('ups-host').value.trim(), ups_port: Number($('ups-port').value), ups_name: $('ups-name').value.trim(), profile: $('sampling-profile').value};
+  state.hardwareDraft = {...state.hardwareDraft, storage_mode: $('storage-mode').value, storage_paths: [...new Set(paths)], cpu_sensor: $('cpu-sensor').value, disk_sensor: $('disk-sensor').value, gpu: $('gpu-select').value, power_mode: $('power-mode').value, ups_mode: $('ups-mode').value, ups_socket: $('ups-socket').value.trim(), ups_host: $('ups-host').value.trim(), ups_port: Number($('ups-port').value), ups_name: $('ups-name').value.trim(), profile: $('sampling-profile').value};
   updateHardwareControls();
 }
 function fillSelect(id, rows, selected) {
@@ -178,6 +200,7 @@ function renderHardwareForm() {
   fillSelect('cpu-sensor', [['auto','自动选择'], ['off','关闭采集'], ...sensorChoices('cpu')], d.cpu_sensor);
   fillSelect('disk-sensor', [['auto','自动选择最高温度'], ['off','关闭采集'], ...sensorChoices('disk')], d.disk_sensor);
   fillSelect('gpu-select', [['auto','自动选择'], ['off','关闭采集'], ...(h.gpus || []).map(g => [g.id, `${g.label || g.id} · ${g.backend || '未知来源'}${g.valid ? '' : ' · ' + (g.reason || '不可用')}`])], d.gpu);
+  $('power-mode').value = d.power_mode || 'auto';
   $('ups-mode').value = d.ups_mode; $('sampling-profile').value = d.profile;
   for (const [id, value] of [['ups-socket',d.ups_socket],['ups-host',d.ups_host],['ups-port',d.ups_port ?? 3493],['ups-name',d.ups_name]]) if (document.activeElement !== $(id)) $(id).value = value ?? '';
   const names = document.createDocumentFragment();

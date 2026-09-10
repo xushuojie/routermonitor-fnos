@@ -301,7 +301,11 @@ class WebApp:
                             'detail': storage.get('reason') or '已发现 %d 个存储卷' % len(storage.get('volumes', []))})
         diagnostics.append({'component': '网络接口', 'status': 'ok' if self.sources.host_network else 'unavailable',
                             'detail': '已发现 %d 个接口；多端口合计可能包含同一流量的多次经过' % len(self.sources.rows) if self.sources.host_network else '无法核对宿主网络命名空间'})
-        return {**inventory, 'settings': selected, 'storage': storage, 'diagnostics': diagnostics,
+        snapshot = self.metrics.read_snapshot() or {}
+        power = snapshot.get('power', {})
+        diagnostics.append({'component': '功率来源', 'status': 'ok' if power.get('valid') else 'unavailable',
+                            'detail': (power.get('label', '') + '；' + power.get('reason', '等待功率采集')).strip('；')})
+        return {**inventory, 'settings': selected, 'storage': storage, 'diagnostics': diagnostics, 'power': power,
                 'intervals': hardware_settings.intervals(selected)}
 
     def diagnostics(self):
@@ -315,7 +319,7 @@ class WebApp:
             for token in sorted((v for v in private if v and v != '/'), key=len, reverse=True):
                 text = text.replace(token, '[已隐藏]')
             return text
-        return {'app_version': '1.3.0-5', 'architecture': 'amd64',
+        return {'app_version': '1.3.0-7', 'architecture': 'amd64',
                 'profile': settings['profile'], 'intervals': value['intervals'],
                 'storage': [{'index': i + 1, 'filesystem': row.get('filesystem'), 'valid': row.get('valid'),
                              'included': row.get('included'), 'reason': clean(row.get('reason', ''))}

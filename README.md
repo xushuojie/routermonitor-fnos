@@ -24,14 +24,16 @@ NAS Monitor 包含飞牛 FPK 服务端、网页控制台、Android 原生 App �
 <a id="downloads"></a>
 ## 下载、版本与适用设备
 
-当前发布：[v1.3.0-5 Release](https://github.com/xushuojie/routermonitor-fnos/releases/tag/v1.3.0-5)。**Release 标签对应飞牛版本，Android APK 自身版本为 1.1.5-adaptive-test。**
+新增功能 **1.3.0-7：支持选择 UPS / 平台 / CPU 封装功率并同时展示各项读数**。网页明确标注范围，无传感器时保持不可用；新版 FPK 已在下方 Release 提供。详见[功率来源与升级说明](docs/功率来源与降级.md)。
+
+当前发布：[v1.3.0-7 Release](https://github.com/xushuojie/routermonitor-fnos/releases/tag/v1.3.0-7)。**Release 标签对应飞牛版本，Android APK 自身版本为 1.1.5-adaptive-test。**
 
 | 组件 | 版本 / 要求 | 下载或入口 |
 | --- | --- | --- |
-| 飞牛 FPK | **1.3.0-5**；x86-64 / amd64；需要 Docker，含离线镜像 | [下载 FPK](https://github.com/xushuojie/routermonitor-fnos/releases/download/v1.3.0-5/routermonitor-fnos-1.3.0-5-amd64.fpk) |
-| Android App | **1.1.5-adaptive-test**；最低 Android 4.3 / API 18 | [下载 APK](https://github.com/xushuojie/routermonitor-fnos/releases/download/v1.3.0-5/routermonitor-android-1.1.5-adaptive-test.apk) |
+| 飞牛 FPK | **1.3.0-7**；x86-64 / amd64；需要 Docker，含离线镜像 | [下载 FPK](https://github.com/xushuojie/routermonitor-fnos/releases/download/v1.3.0-7/routermonitor-fnos-1.3.0-7-amd64.fpk) |
+| Android App | **1.1.5-adaptive-test**；最低 Android 4.3 / API 18 | [下载 APK](https://github.com/xushuojie/routermonitor-fnos/releases/download/v1.3.0-7/routermonitor-android-1.1.5-adaptive-test.apk) |
 | 网页控制台 | 随 FPK 提供，无需另装网页程序 | 安装后访问 `http://NAS局域网IP:18199` |
-| 安装包校验 | SHA-256 | [下载校验文件](https://github.com/xushuojie/routermonitor-fnos/releases/download/v1.3.0-5/SHA256SUMS.txt) |
+| 安装包校验 | SHA-256 | [下载校验文件](https://github.com/xushuojie/routermonitor-fnos/releases/download/v1.3.0-7/SHA256SUMS.txt) |
 | ESP8266 固件 | 本次未更新；ST7789 / ILI9341 | [历史发行版](https://github.com/xushuojie/routermonitor-fnos/releases) |
 | 完整源码 | Android、飞牛、网页与 ESP8266 | [下载 main 分支 ZIP](https://github.com/xushuojie/routermonitor-fnos/archive/refs/heads/main.zip) |
 
@@ -49,7 +51,7 @@ Linux 执行 `sha256sum -c SHA256SUMS.txt`；macOS 执行 `shasum -a 256 -c SHA2
 Windows PowerShell：
 
 ```powershell
-Get-FileHash .\routermonitor-fnos-1.3.0-5-amd64.fpk -Algorithm SHA256
+Get-FileHash .\routermonitor-fnos-1.3.0-7-amd64.fpk -Algorithm SHA256
 Get-FileHash .\routermonitor-android-1.1.5-adaptive-test.apk -Algorithm SHA256
 ```
 
@@ -196,7 +198,7 @@ flowchart TD
 
 *流程图为操作示意，不是飞牛应用中心实机截图。不同飞牛版本的手动安装入口位置可能不同，以系统界面为准。*
 
-1. 在飞牛应用中心找到**手动安装 / 本地安装**入口，选择 `routermonitor-fnos-1.3.0-5-amd64.fpk`。
+1. 在飞牛应用中心找到**手动安装 / 本地安装**入口，选择 `routermonitor-fnos-1.3.0-7-amd64.fpk`。
 2. 在 **NAS Monitor 初始设置**向导填写下表内容。
 3. 完成安装并启动应用。首次启动需加载包内镜像，等待应用进入运行状态。
 4. 浏览器访问 `http://NAS的IP:实际端口`，例如 `http://192.168.1.10:18199`。
@@ -251,7 +253,7 @@ flowchart TD
 | --- | --- | --- |
 | 网络吞吐 | 所选接口上传 / 下载，近 30 秒曲线 | 包含局域网传输，不是单纯互联网流量 |
 | 硬盘读写 | 物理块设备合计 I/O | RAID 体现底层设备实际读写，不等于共享文件夹速度 |
-| 功率 | UPS 的可用功率读数 | 不是根据 CPU 占用率估算；缺少数据时显示不可用 |
+| 功率 | UPS、平台、CPU 封装独立读数，可选择主卡片来源 | 不是根据 CPU 占用率估算；缺少数据时显示不可用 |
 | CPU / GPU / 内存 | 宿主机占用与来源 | GPU 依赖驱动与数据源；一项不可用不影响其他项 |
 | 24 小时流量 | 已观测历史滚动统计 | 初装不补造安装前数据，留意覆盖时长 |
 | 存储空间 | 所选文件系统去重后的容量 | 配合逐卷卡片核对计入范围 |

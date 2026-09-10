@@ -83,11 +83,13 @@ class Integration(unittest.TestCase):
     self.assertEqual(status, 200)
     self.assertEqual(json.loads(body)['lan_access']['port'], server.port)
     status, _, body = server.request('/api/hardware-settings', headers=auth); self.assertEqual(status, 200)
-    settings = json.loads(body); settings['profile'] = 'eco'
+    settings = json.loads(body); settings['profile'] = 'eco'; settings['power_mode'] = 'cpu_package'
     self.assertEqual(server.request('/api/hardware-settings', 'PUT', settings, base)[0], 403)
     status, _, body = server.request('/api/hardware-settings', 'PUT', settings, auth); self.assertEqual(status, 200)
     saved = json.loads(body); self.assertEqual(saved['profile'], 'eco'); self.assertEqual(saved['revision'], 2)
     self.assertEqual(hardware_settings.load_settings(folder)['profile'], 'eco')
+    self.assertEqual(hardware_settings.load_settings(folder)['power_mode'], 'cpu_package')
+    self.assertEqual(server.request('/api/hardware-settings','PUT',{**saved,'power_mode':'fake'},auth)[0],400)
     self.assertEqual(server.request('/api/hardware-settings', 'PUT', settings, auth)[0], 409)
     self.assertEqual(server.request('/api/hardware-settings', 'PUT', saved, {**auth, 'Origin': 'https://wrong.example'})[0], 403)
     with patch('storage_discovery.read_snapshot', return_value={'volumes': [{'id': 'root-id', 'path': '/', 'mounts': ['/']}, {'id': 'usb-uuid', 'path': '/mnt/usb', 'mounts': ['/mnt/usb']}] }):

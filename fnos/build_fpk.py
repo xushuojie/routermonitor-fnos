@@ -3,7 +3,7 @@ import copy, hashlib, io, json, re, tarfile
 from pathlib import Path
 ROOT=Path(__file__).resolve().parent
 OUTPUT=ROOT.parent/"dist"
-VERSION='1.3.0-5'
+VERSION='1.3.0-7'
 def unpack(data):
     with tarfile.open(fileobj=io.BytesIO(data)) as t:
         return {m.name:t.extractfile(m).read() for m in t if m.isfile()}
@@ -34,7 +34,7 @@ def build():
             if path.suffix=='.py':compile(payload,str(path),'exec')
             m=tarfile.TarInfo(path.relative_to(ROOT).as_posix());m.size=len(payload);m.mode=0o644;t.addfile(m,io.BytesIO(payload))
     layer=blob(buf.getvalue(),'application/vnd.oci.image.layer.v1.tar');config['rootfs']['diff_ids'].append(layer['digest'])
-    config['history'].append({'created_by':'Two-page hardware monitor with persistent hardware selection'})
+    config['history'].append({'created_by':'UPS-first power with platform and CPU-package energy fallback'})
     cfg=blob(dump(config),oci['config']['mediaType']);oci['config']=cfg;oci['layers'].append(layer)
     index['manifests'][0].update(blob(dump(oci),oci['mediaType']))
     tag='routermonitor-fnos:'+VERSION
@@ -56,9 +56,9 @@ def build():
     appchanges={'docker/host-metrics/.keep':b''}
     for path in (ROOT/'docker').iterdir():
         if path.is_file():appchanges['docker/'+path.name]=path.read_bytes()
-    appchanges['docker/docker-compose.yaml']=appchanges['docker/docker-compose.yaml'].replace(b'routermonitor-fnos:1.2.0-6',tag.encode())
+    appchanges['docker/docker-compose.yaml']=re.sub(rb'routermonitor-fnos:[0-9][0-9A-Za-z.\-]*',tag.encode(),appchanges['docker/docker-compose.yaml'])
     app=pack(p['app.tgz'],appchanges);changes['app.tgz']=app
-    meta=p['manifest'].decode().replace('1.2.0-6',VERSION)
+    meta=re.sub(r'(?m)^version\s*=.*$', 'version               = '+VERSION,p['manifest'].decode())
     meta=re.sub(r'checksum\s*=\s*\w+','checksum              = '+hashlib.md5(app).hexdigest(),meta);changes['manifest']=meta.encode()
     OUTPUT.mkdir(exist_ok=True)
     out=OUTPUT/('routermonitor-fnos-'+VERSION+'-amd64.fpk');out.write_bytes(pack(source,changes))

@@ -1,15 +1,19 @@
 import ast,hashlib,io,json,tarfile,sys
+import re
 from pathlib import Path
 ROOT=Path(__file__).resolve().parent
+from build_fpk import VERSION
 def files(data):
     with tarfile.open(fileobj=io.BytesIO(data)) as t:
         return {m.name:t.extractfile(m).read() for m in t if m.isfile()}
-path=Path(sys.argv[1]) if len(sys.argv)>1 else ROOT.parent/'downloads/routermonitor-fnos-1.3.0-5-amd64.fpk';p=files(path.read_bytes())
+path=Path(sys.argv[1]) if len(sys.argv)>1 else ROOT.parent/'dist'/('routermonitor-fnos-'+VERSION+'-amd64.fpk');p=files(path.read_bytes())
+assert re.search(r'(?m)^version\s*=\s*(\S+)',p['manifest'].decode())[1]==VERSION
 assert hashlib.md5(p['app.tgz']).hexdigest() in p['manifest'].decode()
 assert hashlib.sha256(p['cmd/image.tar']).hexdigest()==p['cmd/image.sha256'].decode().strip()
-app=files(p['app.tgz']);assert b'routermonitor-fnos:1.3.0-5' in app['docker/docker-compose.yaml']
+app=files(p['app.tgz']);assert ('routermonitor-fnos:'+VERSION).encode() in app['docker/docker-compose.yaml']
 assert b'./host-metrics:/host/monitor:ro' in app['docker/docker-compose.yaml']
 assert app['docker/host_collector.py']==(ROOT/'docker/host_collector.py').read_bytes()
+assert app['docker/power_collector.py']==(ROOT/'docker/power_collector.py').read_bytes()
 im=files(p['cmd/image.tar'])
 for name,data in im.items():
     if name.startswith('blobs/sha256/'):assert hashlib.sha256(data).hexdigest()==name.split('/')[-1]
@@ -19,7 +23,7 @@ index=json.loads(im['index.json']);oci=json.loads(resolve(index['manifests'][0])
 assert cfg['architecture']=='amd64'
 assert len(oci['layers'])==len(cfg['rootfs']['diff_ids'])
 for desc,diff in zip(oci['layers'],cfg['rootfs']['diff_ids']):assert 'sha256:'+hashlib.sha256(resolve(desc)).hexdigest()==diff
-mf=json.loads(im['manifest.json']);assert mf[0]['RepoTags']==['routermonitor-fnos:1.3.0-5']
+mf=json.loads(im['manifest.json']);assert mf[0]['RepoTags']==['routermonitor-fnos:'+VERSION]
 layer=files(resolve(oci['layers'][-1]))
 for file in (ROOT/'app').rglob('*'):
     if file.is_file() and '__pycache__' not in file.parts and file.suffix!='.pyc':

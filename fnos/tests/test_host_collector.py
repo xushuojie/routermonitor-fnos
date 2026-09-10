@@ -31,6 +31,10 @@ class HostCollectorTests(unittest.TestCase):
     deadline=time.monotonic()+12
     while time.monotonic()<deadline and not (output/'gpu.json').exists(): time.sleep(.1)
     self.assertTrue((output/'gpu.json').exists())
+    self.assertTrue((output/'power.json').exists())
+    power=json.loads((output/'power.json').read_text())
+    self.assertEqual(power['schema'],1)
+    self.assertIn(power['power']['scope'],('unavailable','platform','cpu_package'))
     pid=(output/'collector.pid').read_text()
     host.control('start',output);time.sleep(.3)
     self.assertEqual((output/'collector.pid').read_text(),pid)

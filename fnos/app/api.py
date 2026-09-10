@@ -466,6 +466,10 @@ class UpsMonitor:
         self.stop = threading.Event()
         self.thread = None
         self.settings_signature = None
+        import power
+        self.power_value = power.unavailable('等待宿主机功率采样')
+        self.power_at = 0
+        self.power_mode = 'auto'
 
     def sample(self):
         settings = load_settings()
@@ -479,7 +483,11 @@ class UpsMonitor:
             value = ups_status()
         except Exception:
             value = {"watts": None, "valid": False, "source": "unavailable", "reason": "UPS 采集不可用"}
+        import power
+        fallback = power.host_power()
         with self.lock:
+            self.power_value, self.power_at = fallback, time.monotonic()
+            self.power_mode = settings.get('power_mode', 'auto')
             if value["valid"]:
                 self.value, self.sampled_at = value, time.monotonic()
             elif value.get("reason") != "timeout":
@@ -491,6 +499,25 @@ class UpsMonitor:
             if self.value["valid"] and age >= max(6, intervals()["ups"] * 3):
                 return {"watts": None, "valid": False, "source": "unavailable", "reason": "expired"}
             return {**self.value, "age_seconds": round(age, 1) if self.value["valid"] else None}
+
+    def power_snapshot(self, now):
+        import power
+        ups = self.snapshot(now)
+        with self.lock:
+            fallback = dict(self.power_value)
+            mode = self.power_mode
+            age = fallback.get('age_seconds', 0) + max(0, now-self.power_at)
+            if fallback.get('valid') and age >= 15:
+                fallback = power.unavailable('宿主机功率采集缓存过期')
+            elif fallback.get('valid'):
+                fallback['age_seconds'] = round(age, 1)
+            # Both independent readings use the same atomic host sample clock.
+            if age >= 15:
+                fallback = power.unavailable('宿主机功率采集缓存过期')
+            elif 'sources' in fallback:
+                fallback['sources'] = {scope: {**row, 'age_seconds': round(age, 1) if row.get('valid') else None}
+                                       for scope, row in fallback['sources'].items()}
+        return power.select(ups, fallback, mode)
 
     def run(self):
         while not self.stop.is_set():
@@ -539,7 +566,7 @@ class Metrics:
             self.cached_temperatures = None
             self.settings_signature = signature
         if not force and self.cached is not None and 0 <= now - self.sampled_at < cadence["status"]:
-            return {**self.cached, "traffic_24h": self.history_snapshot(), "ups": self.ups.snapshot(now)}
+            return {**self.cached, "traffic_24h": self.history_snapshot(), "ups": self.ups.snapshot(now), "power": self.ups.power_snapshot(now)}
         current_cpu = cpu_sample()
         cpu_percent = 0.0
         cpu_valid = False
@@ -645,6 +672,7 @@ class Metrics:
             },
             "storage": self.cached_storage,
             "ups": self.ups.snapshot(now),
+            "power": self.ups.power_snapshot(now),
             "uptime": uptime_seconds(),
             "traffic_24h": self.history_snapshot(),
         }
@@ -666,7 +694,7 @@ class Metrics:
         cached, sampled_at, sequence, temperatures_at, storage_at = published
         now = time.monotonic()
         result = {**cached, "traffic_24h": self.history_snapshot(),
-                  "ups": self.ups.snapshot(now), "v": 2, "seq": sequence,
+                  "ups": self.ups.snapshot(now), "power": self.ups.power_snapshot(now), "v": 2, "seq": sequence,
                   "age": round(max(0, now - sampled_at), 3),
                   "metric_age": {"temperature": round(max(0, now - temperatures_at), 1),
                                  "storage": round(max(0, now - storage_at), 1)}}
@@ -799,6 +827,7 @@ def handler_factory(metrics, token, network=None, web=None):
                 for key, field in (("cpu", "percent"), ("gpu", "utilization"), ("memory", "percent")):
                     snapshot[key] = {**snapshot[key], field: snapshot[key][field] if snapshot[key]["valid"] else None}
             if query.get("display") == ["1"]:
+                power_value = snapshot.get('power')
                 fields = {
                     "cpu": ("percent",), "gpu": ("utilization",), "memory": ("percent",),
                     "traffic_24h": ("rx_bytes", "tx_bytes", "coverage_seconds", "valid"),
@@ -809,6 +838,8 @@ def handler_factory(metrics, token, network=None, web=None):
                 snapshot = {**{key: {field: snapshot[key][field] for field in names}
                                for key, names in fields.items()},
                             "uptime": snapshot["uptime"], "temperature_summary": snapshot["temperature_summary"]}
+                if version2 and power_value is not None:
+                    snapshot['power'] = {field: power_value[field] for field in ('watts', 'valid', 'scope', 'source')}
             if version2:
                 snapshot.update(metadata)
             return self.respond(200, snapshot)

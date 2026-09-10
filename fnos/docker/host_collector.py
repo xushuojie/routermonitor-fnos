@@ -101,6 +101,8 @@ def snapshot():
 
 def run(output):
     import fcntl
+    from power_collector import PowerReader, unavailable
+    power = PowerReader()
     output.mkdir(parents=True, exist_ok=True)
     with open(output / 'collector.lock', 'a') as lock:
         try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -114,6 +116,17 @@ def run(output):
         try:
             while not stop:
                 started = time.monotonic()
+                try:
+                    power_value = power.sample()
+                except Exception:
+                    power_value = unavailable('宿主机功率采集暂不可用')
+                try:
+                    temporary = output / 'power.next'
+                    temporary.write_text(json.dumps({'schema': 1, 'sampled_at': time.time(),
+                                                     'power': power_value}), encoding='utf-8')
+                    os.replace(temporary, output / 'power.json')
+                except OSError:
+                    pass
                 try:
                     value = snapshot(); temporary = output / 'gpu.next'
                     temporary.write_text(json.dumps(value, ensure_ascii=False), encoding='utf-8')

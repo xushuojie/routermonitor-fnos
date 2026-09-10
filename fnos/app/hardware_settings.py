@@ -10,7 +10,7 @@ from network_sources import atomic_json, SelectionError
 DEFAULTS = {'revision': 1, 'storage_mode': 'auto', 'storage_paths': [], 'storage_volume_ids': {},
             'cpu_sensor': 'auto', 'disk_sensor': 'auto', 'gpu': 'auto',
             'ups_mode': 'auto', 'ups_socket': '', 'ups_host': '127.0.0.1',
-            'ups_port': 3493, 'ups_name': '', 'profile': 'realtime'}
+            'ups_port': 3493, 'ups_name': '', 'profile': 'realtime', 'power_mode': 'auto'}
 PROFILES = {
     'realtime': {'network': .2, 'status': 1, 'storage': 30, 'sensors': 5, 'ups': 2},
     'standard': {'network': .5, 'status': 1, 'storage': 45, 'sensors': 10, 'ups': 5},
@@ -30,7 +30,7 @@ def validate(value):
     result = {**copy.deepcopy(DEFAULTS), **value}
     if type(result['revision']) is not int or result['revision'] < 1:
         raise SelectionError('设置版本无效，请重新载入')
-    for key, choices in [('storage_mode', ('auto', 'selected')), ('ups_mode', ('auto', 'local', 'remote', 'off')), ('profile', tuple(PROFILES))]:
+    for key, choices in [('storage_mode', ('auto', 'selected')), ('ups_mode', ('auto', 'local', 'remote', 'off')), ('profile', tuple(PROFILES)), ('power_mode', ('auto', 'ups_output', 'platform', 'cpu_package'))]:
         if result[key] not in choices:
             raise SelectionError('请选择有效的采集方式')
     paths = result['storage_paths']
